@@ -25,11 +25,12 @@ internal static class EmailTemplates
     public static readonly EmailTemplate IdentityConfirmation = new("identity-confirmation", 1, "Confirm your email");
     public static readonly EmailTemplate IdentityPasswordRecovery = new("identity-password-recovery", 1, "Reset your password");
     public static readonly EmailTemplate CustomerMagicLink = new("customer-magic-link", 1, "Your secure customer portal link");
+    public static readonly EmailTemplate ContactSupport = new("contact-support", 1, "Contact support");
 
     private static readonly Dictionary<string, EmailTemplate> All = new[]
     {
         PurchaseActivation, RenewalReminder, RenewalReceipt, PaymentFailure, Invoice,
-        OperatorInvitation, IdentityConfirmation, IdentityPasswordRecovery, CustomerMagicLink
+        OperatorInvitation, IdentityConfirmation, IdentityPasswordRecovery, CustomerMagicLink, ContactSupport
     }.ToDictionary(item => item.Name, StringComparer.Ordinal);
 
     public static EmailTemplate Resolve(string name) =>
@@ -180,13 +181,16 @@ internal sealed class MailerSendEmailTransport(HttpClient client, IOptions<Maile
     {
         var template = EmailTemplates.Resolve(email.TemplateName);
         var text = RenderText(template, email.Model);
+        var subject = template == EmailTemplates.ContactSupport && email.Model.TryGetValue("reason", out var reasonLabel)
+            ? reasonLabel
+            : template.Subject;
         using var request = new HttpRequestMessage(HttpMethod.Post, "v1/email")
         {
             Content = JsonContent.Create(new
             {
                 from = new { email = configured.FromEmail, name = configured.FromName },
                 to = new[] { new { email = email.Recipient } },
-                subject = template.Subject,
+                subject,
                 text,
                 html = $"<p>{WebUtility.HtmlEncode(text).Replace("\n", "<br>", StringComparison.Ordinal)}</p>"
             })
@@ -215,6 +219,16 @@ internal sealed class MailerSendEmailTransport(HttpClient client, IOptions<Maile
 
     private static string RenderText(EmailTemplate template, IReadOnlyDictionary<string, string> model)
     {
+        if (template == EmailTemplates.ContactSupport)
+        {
+            var contactLines = new List<string>();
+            if (model.TryGetValue("replyEmail", out var replyEmail)) contactLines.Add($"Reply email: {replyEmail}");
+            if (model.TryGetValue("licenseId", out var licenseId)) contactLines.Add($"License ID: {licenseId}");
+            contactLines.Add(string.Empty);
+            if (model.TryGetValue("message", out var message)) contactLines.Add(message);
+            return string.Join(Environment.NewLine, contactLines);
+        }
+
         var lines = new List<string> { template.Subject };
         if (model.TryGetValue("actionUrl", out var actionUrl)) lines.Add(actionUrl);
         if (template == EmailTemplates.PurchaseActivation && model.TryGetValue("activationCode", out var activationCode))

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Public "Contact support" page (`/support/contact`, #72) so customers have
+  somewhere to reach `hello@repasscloud.com` - in particular, somewhere for
+  the `purchase-activation` email's "Request machine-wide code" button to
+  link to. The form (reason dropdown, reply email, optional license ID
+  prefillable via `?licenseId=&reason=`, message) is handled by
+  `ContactSupportService` (`src/LicenseServer/ContactSupport.cs`), which
+  queues a plain-text email through the existing transactional email outbox
+  (`ITransactionalEmailSender.QueueAsync`) under a new `contact-support`
+  template entry in `EmailTemplates`
+  (`src/LicenseServer/TransactionalEmail.cs`) rather than sending inline, so
+  it gets the same retry/delivery tracking as other transactional email.
+
 ## [0.3.2] - 2026-08-23
 
 ### Fixed
