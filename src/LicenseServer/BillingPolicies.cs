@@ -52,13 +52,35 @@ internal sealed class BillingPolicyOptions
     public string DisputeAction { get; set; } = "review";
 }
 
+// Pure and DB/network-free on purpose: RenewalAsync's PDF-generation failure path is exercised
+// via the Postgres-backed suite (no R2/Stripe configured there), but the model-shape logic
+// itself - keep licenseId, add invoicePdfUrl only when present - is unit-tested directly.
+internal static class RenewalReceiptModel
+{
+    public static Dictionary<string, string> Build(string licenseId, string? invoicePdfUrl)
+    {
+        var model = new Dictionary<string, string> { ["licenseId"] = licenseId };
+        if (!string.IsNullOrEmpty(invoicePdfUrl))
+            model["invoicePdfUrl"] = invoicePdfUrl;
+        return model;
+    }
+}
+
 internal sealed class StripeBillingPolicyProcessor(
     ApplicationDbContext db,
     LicenseStore licenses,
     ITransactionalEmailSender emails,
+    IInvoicePdfService invoicePdf,
     IOptions<BillingPolicyOptions> options,
-    TimeProvider clock)
+    TimeProvider clock,
+    IConfiguration configuration,
+    IWebHostEnvironment environment,
+    ILogger<StripeBillingPolicyProcessor> logger)
 {
+    private static readonly Action<ILogger, Guid, Exception> LogInvoicePdfGenerationFailed = LoggerMessage.Define<Guid>(
+        LogLevel.Warning, new EventId(1501, "InvoicePdfGenerationFailed"),
+        "Invoice PDF generation failed for license order {LicenseOrderId}; renewal receipt queued without invoicePdfUrl.");
+
     public async Task<BillingEventProcessResult> ApplyAsync(
         BillingSnapshot snapshot,
         CancellationToken cancellationToken = default)
@@ -371,9 +393,10 @@ internal sealed class StripeBillingPolicyProcessor(
             AppliedEventId = snapshot.EventId,
             CreatedAt = clock.GetUtcNow()
         });
+        var invoicePdfUrl = await TryGenerateInvoicePdfUrlAsync(order, contract, product, snapshot, cancellationToken);
         await emails.QueueAsync(new TransactionalEmail(
                 EmailTemplates.RenewalReceipt, contract.Customer!.Email,
-                new Dictionary<string, string> { ["licenseId"] = contract.License.LicenseId }),
+                RenewalReceiptModel.Build(contract.License.LicenseId, invoicePdfUrl)),
             $"billing:renewal:{snapshot.InvoiceId}", cancellationToken);
         db.AuditRecords.Add(Audit(snapshot, "billing.renewal-paid", contract.Id, new
         {
@@ -383,6 +406,28 @@ internal sealed class StripeBillingPolicyProcessor(
         }));
         await db.SaveChangesAsync(cancellationToken);
         return Completed();
+    }
+
+    private async Task<string?> TryGenerateInvoicePdfUrlAsync(
+        LicenseOrder order, BillingContract contract, ProductDefinition product, BillingSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await invoicePdf.GenerateAndStoreAsync(new InvoicePdfRequest(
+                order.Id, snapshot.InvoiceId!, contract.Customer!.Name, contract.Customer!.Email,
+                product.DisplayName, contract.Edition, contract.Seats), cancellationToken);
+            var publicBaseUrl = configuration["CustomerPortal:PublicBaseUrl"]?.TrimEnd('/')
+                ?? (environment.IsDevelopment()
+                    ? "http://localhost:8080"
+                    : throw new InvalidOperationException("CustomerPortal:PublicBaseUrl is required outside Development."));
+            return $"{publicBaseUrl}/invoices/{order.Id}/pdf";
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            LogInvoicePdfGenerationFailed(logger, order.Id, exception);
+            return null;
+        }
     }
 
     private async Task<BillingEventProcessResult> PaymentFailedAsync(BillingSnapshot snapshot, CancellationToken cancellationToken)
