@@ -38,6 +38,18 @@ public sealed class TransactionalEmailTests(PostgresWebFixture fixture)
 
     [Fact]
     [Trait("ExpectedGreenStage", "12")]
+    public async Task QueueRejectsActivationCodeModelKeyOutsidePurchaseActivationTemplate()
+    {
+        await using var scope = fixture.Factory.Services.CreateAsyncScope();
+        var sender = scope.ServiceProvider.GetRequiredService<ITransactionalEmailSender>();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sender.QueueAsync(
+            new TransactionalEmail(EmailTemplates.RenewalReceipt, "guard@example.com",
+                new Dictionary<string, string> { ["activationCode"] = "SHOULD-NOT-LEAK" }),
+            "stage12-guard-activation-code"));
+    }
+
+    [Fact]
+    [Trait("ExpectedGreenStage", "12")]
     public async Task IdentitySenderQueuesProviderNeutralTemplates()
     {
         await using var scope = fixture.Factory.Services.CreateAsyncScope();
