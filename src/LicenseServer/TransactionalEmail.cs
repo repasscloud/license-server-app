@@ -1,9 +1,11 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using LicenseServer.Data;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
@@ -12,7 +14,10 @@ using Microsoft.Extensions.Options;
 
 namespace LicenseServer;
 
-internal readonly record struct EmailTemplate(string Name, int Version, string Subject);
+// HasHtmlTemplate is false only for templates that intentionally have no EmailTemplates/*.html
+// file (currently just ContactSupport, #72) and must go through the plain-text-only rendering
+// path in MailerSendEmailTransport instead of EmailTemplateRenderer.
+internal readonly record struct EmailTemplate(string Name, int Version, string Subject, bool HasHtmlTemplate = true);
 
 internal static class EmailTemplates
 {
@@ -25,11 +30,12 @@ internal static class EmailTemplates
     public static readonly EmailTemplate IdentityConfirmation = new("identity-confirmation", 1, "Confirm your email");
     public static readonly EmailTemplate IdentityPasswordRecovery = new("identity-password-recovery", 1, "Reset your password");
     public static readonly EmailTemplate CustomerMagicLink = new("customer-magic-link", 1, "Your secure customer portal link");
+    public static readonly EmailTemplate ContactSupport = new("contact-support", 1, "Contact support", HasHtmlTemplate: false);
 
     private static readonly Dictionary<string, EmailTemplate> All = new[]
     {
         PurchaseActivation, RenewalReminder, RenewalReceipt, PaymentFailure, Invoice,
-        OperatorInvitation, IdentityConfirmation, IdentityPasswordRecovery, CustomerMagicLink
+        OperatorInvitation, IdentityConfirmation, IdentityPasswordRecovery, CustomerMagicLink, ContactSupport
     }.ToDictionary(item => item.Name, StringComparer.Ordinal);
 
     public static EmailTemplate Resolve(string name) =>
@@ -179,16 +185,18 @@ internal sealed class MailerSendEmailTransport(HttpClient client, IOptions<Maile
         CancellationToken cancellationToken = default)
     {
         var template = EmailTemplates.Resolve(email.TemplateName);
-        var text = RenderText(template, email.Model);
+        var (subject, text, html) = template.HasHtmlTemplate
+            ? (template.Subject, EmailTemplateRenderer.RenderText(template, email.Model), EmailTemplateRenderer.RenderHtml(template, email.Model))
+            : RenderPlainTextOnly(template, email.Model);
         using var request = new HttpRequestMessage(HttpMethod.Post, "v1/email")
         {
             Content = JsonContent.Create(new
             {
                 from = new { email = configured.FromEmail, name = configured.FromName },
                 to = new[] { new { email = email.Recipient } },
-                subject = template.Subject,
+                subject,
                 text,
-                html = $"<p>{WebUtility.HtmlEncode(text).Replace("\n", "<br>", StringComparison.Ordinal)}</p>"
+                html
             })
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", configured.ApiToken);
@@ -213,12 +221,99 @@ internal sealed class MailerSendEmailTransport(HttpClient client, IOptions<Maile
         }
     }
 
-    private static string RenderText(EmailTemplate template, IReadOnlyDictionary<string, string> model)
+    // ContactSupport (#72) has no EmailTemplates/*.html file by design: it reads a small fixed
+    // set of model keys directly rather than substituting tokens into a shared template, and its
+    // subject is the human-readable contact reason rather than the template's static subject.
+    private static (string Subject, string Text, string Html) RenderPlainTextOnly(
+        EmailTemplate template, IReadOnlyDictionary<string, string> model)
     {
-        var lines = new List<string> { template.Subject };
-        if (model.TryGetValue("actionUrl", out var actionUrl)) lines.Add(actionUrl);
-        if (template == EmailTemplates.PurchaseActivation && model.TryGetValue("activationCode", out var activationCode))
-            lines.Add($"One-time activation code: {activationCode}");
+        var subject = model.TryGetValue("reason", out var reasonLabel) ? reasonLabel : template.Subject;
+        var lines = new List<string>();
+        if (model.TryGetValue("replyEmail", out var replyEmail)) lines.Add($"Reply email: {replyEmail}");
+        if (model.TryGetValue("licenseId", out var licenseId)) lines.Add($"License ID: {licenseId}");
+        lines.Add(string.Empty);
+        if (model.TryGetValue("message", out var message)) lines.Add(message);
+        var text = string.Join(Environment.NewLine, lines);
+        var html = $"<p>{WebUtility.HtmlEncode(text).Replace("\n", "<br>", StringComparison.Ordinal)}</p>";
+        return (subject, text, html);
+    }
+}
+
+// Renders EmailTemplates/*.html files (embedded resources) by substituting {{placeholder}}
+// tokens from a TransactionalEmail.Model, and derives a plain-text alternative from the same
+// rendered HTML rather than keeping a second hand-written copy of each template's content.
+internal static class EmailTemplateRenderer
+{
+    private static readonly ConcurrentDictionary<string, string> TemplateCache = new(StringComparer.Ordinal);
+    private static readonly Regex PlaceholderPattern = new(@"\{\{(\w+)\}\}", RegexOptions.Compiled);
+    private static readonly Regex ConditionalBlockPattern = new(
+        @"\{\{#if (\w+)\}\}(.*?)\{\{/if\}\}", RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex HeadPattern = new(@"<head[^>]*>.*?</head>", RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
+    private static readonly Regex CommentPattern = new(@"<!--.*?-->", RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex AnchorPattern = new(
+        "<a\\s+[^>]*href=\"(?<url>[^\"]*)\"[^>]*>(?<text>.*?)</a>",
+        RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
+    private static readonly Regex BlockBreakPattern = new(
+        @"</(p|tr|table|div|h1|h2|h3)>|<br\s*/?>", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex TagPattern = new("<[^>]+>", RegexOptions.Compiled);
+
+    public static string RenderHtml(EmailTemplate template, IReadOnlyDictionary<string, string> model)
+    {
+        if (!template.HasHtmlTemplate)
+            throw new InvalidOperationException(
+                $"Template '{template.Name}' has no HTML file; it must use the plain-text-only rendering path.");
+        return Substitute(ApplyConditionalBlocks(LoadSource(template.Name), model), model);
+    }
+
+    public static string RenderText(EmailTemplate template, IReadOnlyDictionary<string, string> model) =>
+        ToPlainText(RenderHtml(template, model));
+
+    private static string LoadSource(string templateName) =>
+        TemplateCache.GetOrAdd(templateName, static name =>
+        {
+            var assembly = typeof(EmailTemplateRenderer).Assembly;
+            var resourceName = $"{assembly.GetName().Name}.EmailTemplates.{name}.html";
+            using var stream = assembly.GetManifestResourceStream(resourceName)
+                ?? throw new InvalidOperationException($"Email template resource '{resourceName}' was not found.");
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        });
+
+    // A placeholder with no matching model key renders as empty text: the token disappears
+    // rather than leaking a raw "{{token}}" into a sent email or throwing and blocking the
+    // whole send. This lets optional fields (e.g. an invoice link not yet generated) degrade
+    // gracefully instead of requiring every template's every token to always be supplied.
+    private static string Substitute(string source, IReadOnlyDictionary<string, string> model) =>
+        PlaceholderPattern.Replace(source, match =>
+            model.TryGetValue(match.Groups[1].Value, out var value) ? value : string.Empty);
+
+    // Block-conditional behavior: a {{#if key}}...{{/if}} section (including its own markers) is
+    // removed entirely when the model has no non-empty value for key, and kept (markers stripped,
+    // content left in place for the ordinary token pass) otherwise. This is how a template drops a
+    // whole element - not just blanks a token - when optional data (e.g. an invoice PDF link) is
+    // absent, without every consumer needing its own if/else around QueueAsync's model dictionary.
+    private static string ApplyConditionalBlocks(string source, IReadOnlyDictionary<string, string> model) =>
+        ConditionalBlockPattern.Replace(source, match =>
+            model.TryGetValue(match.Groups[1].Value, out var value) && !string.IsNullOrEmpty(value)
+                ? match.Groups[2].Value
+                : string.Empty);
+
+    private static string ToPlainText(string html)
+    {
+        var withoutHead = HeadPattern.Replace(html, string.Empty);
+        var withoutComments = CommentPattern.Replace(withoutHead, string.Empty);
+        var withLinksInlined = AnchorPattern.Replace(withoutComments, match =>
+        {
+            var linkText = TagPattern.Replace(match.Groups["text"].Value, string.Empty).Trim();
+            var url = match.Groups["url"].Value;
+            return url.Length == 0 ? linkText : $"{linkText} ({url})";
+        });
+        var withBreaks = BlockBreakPattern.Replace(withLinksInlined, "\n");
+        var stripped = TagPattern.Replace(withBreaks, string.Empty);
+        var decoded = WebUtility.HtmlDecode(stripped);
+        var lines = decoded.Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0);
         return string.Join(Environment.NewLine, lines);
     }
 }

@@ -55,6 +55,14 @@ services:
       Stripe__ApiKey: ${STRIPE_API_KEY:?Set STRIPE_API_KEY in .env.prod}
       Stripe__WebhookSecret: ${STRIPE_WEBHOOK_SECRET:?Set STRIPE_WEBHOOK_SECRET in .env.prod}
       Stripe__ApiVersion: 2026-07-29.dahlia
+      R2__AccountId: ${R2_ACCOUNT_ID:?Set R2_ACCOUNT_ID in .env.prod}
+      R2__AccessKeyId: ${R2_ACCESS_KEY_ID:?Set R2_ACCESS_KEY_ID in .env.prod}
+      R2__SecretAccessKey: ${R2_SECRET_ACCESS_KEY:?Set R2_SECRET_ACCESS_KEY in .env.prod}
+      R2__BucketName: ${R2_BUCKET_NAME:?Set R2_BUCKET_NAME in .env.prod}
+      Invoice__BusinessName: ${INVOICE_BUSINESS_NAME:?Set INVOICE_BUSINESS_NAME in .env.prod}
+      Invoice__BusinessAddress: ${INVOICE_BUSINESS_ADDRESS:?Set INVOICE_BUSINESS_ADDRESS in .env.prod}
+      Invoice__BusinessAbn: ${INVOICE_BUSINESS_ABN:?Set INVOICE_BUSINESS_ABN in .env.prod}
+      Invoice__BusinessEmail: ${INVOICE_BUSINESS_EMAIL:?Set INVOICE_BUSINESS_EMAIL in .env.prod}
       Billing__GracePeriodDays: ${BILLING_GRACE_PERIOD_DAYS:-7}
       Billing__RefundAction: ${BILLING_REFUND_ACTION:-review}
       Billing__DisputeAction: ${BILLING_DISPUTE_ACTION:-review}

@@ -20,10 +20,12 @@ env:
   IMAGE_NAME: license-server-app
 
 jobs:
-  release:
-    name: Build and push image
+  # Gate that both other jobs depend on, so a bad tag (not on main, or missing a changelog
+  # entry) fails fast instead of burning a Windows runner on the native-AOT job below.
+  validate:
+    name: Validate release
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     steps:
       - name: Check out source
@@ -74,6 +76,86 @@ jobs:
             exit 1
           fi
 
+      - name: Upload release notes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-notes
+          path: release-notes.md
+          retention-days: 1
+
+  # win-x64 Native AOT can only be produced on a Windows host - ilcompiler does not support
+  # cross-compiling from Linux to Windows - so this build runs on its own Windows runner while
+  # linux-x64/linux-arm64 build in the `release` job below.
+  windows-natives:
+    name: Build Windows native binaries
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d # v5.0.0
+        with:
+          global-json-file: global.json
+
+      # LicenseGenerator and LicenseValidator are the standalone CLIs users run to issue and
+      # check licence files; Native AOT gives a single dependency-free executable per RID
+      # instead of a self-contained folder full of runtime DLLs.
+      - name: Build and package win-x64 native binaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+
+          foreach ($proj in @("LicenseGenerator", "LicenseValidator")) {
+            $csproj = "src/$proj/$proj.csproj"
+            $version = (Select-String -Path $csproj -Pattern '<Version>([^<]+)</Version>').Matches[0].Groups[1].Value
+            $stageName = "$proj-$version-win-x64"
+            $stageDir = "artifacts/publish/$stageName"
+            New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+
+            dotnet publish $csproj -c Release -r win-x64 -p:PublishAot=true -o $stageDir
+            if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for $proj" }
+
+            Copy-Item README.md, CHANGELOG.md, LICENSE -Destination $stageDir
+
+            Compress-Archive -Path $stageDir -DestinationPath "artifacts/publish/$stageName.zip" -Force
+
+            tar -czf "artifacts/publish/$stageName.tar.gz" -C artifacts/publish $stageName
+            if ($LASTEXITCODE -ne 0) { throw "tar failed for $proj" }
+
+            Copy-Item "artifacts/publish/$stageName.zip", "artifacts/publish/$stageName.tar.gz" -Destination release-assets
+          }
+
+      - name: Upload win-x64 release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-release-assets
+          path: release-assets/*
+          retention-days: 1
+
+  release:
+    name: Build and push image
+    needs: [validate, windows-natives]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download release notes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-notes
+
       # ghcr.io rejects mixed-case paths; the GitHub org for this repo (repasscloud)
       # is not all lowercase, so the owner segment has to be normalized before use.
       - name: Lowercase the image owner
@@ -84,6 +166,13 @@ jobs:
         uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d # v5.0.0
         with:
           global-json-file: global.json
+
+      # Native AOT builds (including the native linux-x64 target below) need clang; the
+      # aarch64 binutils give ilcompiler the cross-linker/objcopy it needs for linux-arm64.
+      - name: Install ARM64 cross-compilation toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm binutils-aarch64-linux-gnu
 
       # Licensing.Core is what third-party products reference to verify licence files offline
       # (see README "Calling validation directly from an application"). Released alongside the
@@ -116,59 +205,36 @@ jobs:
           cp artifacts/nuget/*.nupkg release-assets/
           cp artifacts/dll/*.zip artifacts/dll/*.tar.gz release-assets/
 
-      # LicenseGenerator is the standalone CLI users run to issue licence files; publishing
-      # self-contained Linux and Windows builds means they don't need the .NET runtime installed.
-      - name: Build and package LicenseGenerator (Linux + Windows)
+      # LicenseGenerator and LicenseValidator are the standalone CLIs users run to issue and
+      # check licence files; Native AOT gives a single dependency-free executable per RID
+      # instead of a self-contained folder full of runtime DLLs. win-x64 is built separately
+      # on a Windows runner (see the `windows-natives` job) since AOT can't cross-compile to
+      # Windows from here.
+      - name: Build and package Linux native binaries
         run: |
           set -euo pipefail
-          VERSION=$(grep -oP '(?<=<Version>)[^<]+' src/LicenseGenerator/LicenseGenerator.csproj)
-          mkdir -p artifacts/publish release-assets
+          for PROJ in LicenseGenerator LicenseValidator; do
+            CSPROJ="src/$PROJ/$PROJ.csproj"
+            VERSION=$(grep -oP '(?<=<Version>)[^<]+' "$CSPROJ")
 
-          for RID in linux-arm64 linux-x64 win-x64; do
-            STAGE_NAME="LicenseGenerator-$VERSION-$RID"
-            STAGE_DIR="artifacts/publish/$STAGE_NAME"
-            mkdir -p "$STAGE_DIR"
+            for RID in linux-x64 linux-arm64; do
+              STAGE_NAME="$PROJ-$VERSION-$RID"
+              STAGE_DIR="artifacts/publish/$STAGE_NAME"
+              mkdir -p "$STAGE_DIR"
 
-            dotnet publish src/LicenseGenerator/LicenseGenerator.csproj \
-              -c Release \
-              -r "$RID" \
-              --self-contained true \
-              -o "$STAGE_DIR"
+              dotnet publish "$CSPROJ" \
+                -c Release \
+                -r "$RID" \
+                -p:PublishAot=true \
+                -o "$STAGE_DIR"
 
-            cp README.md CHANGELOG.md LICENSE "$STAGE_DIR"/
+              cp README.md CHANGELOG.md LICENSE "$STAGE_DIR"/
 
-            ( cd artifacts/publish && zip -r "$STAGE_NAME.zip" "$STAGE_NAME" )
-            ( cd artifacts/publish && tar -czf "$STAGE_NAME.tar.gz" "$STAGE_NAME" )
+              ( cd artifacts/publish && zip -r "$STAGE_NAME.zip" "$STAGE_NAME" )
+              ( cd artifacts/publish && tar -czf "$STAGE_NAME.tar.gz" "$STAGE_NAME" )
 
-            cp artifacts/publish/"$STAGE_NAME.zip" artifacts/publish/"$STAGE_NAME.tar.gz" release-assets/
-          done
-
-      # LicenseValidator is the standalone CLI users run to check a licence file / product
-      # entitlement; publishing self-contained Linux and Windows builds means they don't need
-      # the .NET runtime installed.
-      - name: Build and package LicenseValidator (Linux + Windows)
-        run: |
-          set -euo pipefail
-          VERSION=$(grep -oP '(?<=<Version>)[^<]+' src/LicenseValidator/LicenseValidator.csproj)
-          mkdir -p artifacts/publish release-assets
-
-          for RID in linux-arm64 linux-x64 win-x64; do
-            STAGE_NAME="LicenseValidator-$VERSION-$RID"
-            STAGE_DIR="artifacts/publish/$STAGE_NAME"
-            mkdir -p "$STAGE_DIR"
-
-            dotnet publish src/LicenseValidator/LicenseValidator.csproj \
-              -c Release \
-              -r "$RID" \
-              --self-contained true \
-              -o "$STAGE_DIR"
-
-            cp README.md CHANGELOG.md LICENSE "$STAGE_DIR"/
-
-            ( cd artifacts/publish && zip -r "$STAGE_NAME.zip" "$STAGE_NAME" )
-            ( cd artifacts/publish && tar -czf "$STAGE_NAME.tar.gz" "$STAGE_NAME" )
-
-            cp artifacts/publish/"$STAGE_NAME.zip" artifacts/publish/"$STAGE_NAME.tar.gz" release-assets/
+              cp artifacts/publish/"$STAGE_NAME.zip" artifacts/publish/"$STAGE_NAME.tar.gz" release-assets/
+            done
           done
 
       # Full source snapshot for this release, named after the container tag since it isn't
@@ -184,6 +250,12 @@ jobs:
           tar -czf "release-assets/src-$TAG_NAME.tar.gz" \
             --exclude='bin' --exclude='obj' \
             src
+
+      - name: Download win-x64 release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-release-assets
+          path: release-assets
 
       - name: Generate checksums
         run: |

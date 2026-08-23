@@ -37,12 +37,12 @@ fi
 
 # Compose gives already-exported shell/session env vars precedence over --env-file, so a stray
 # `export IMAGE_TAG=...` (or any other var also set in .env.prod) left over in this shell would
-# silently shadow the value in the file. Re-export every var from .env.prod now so the file is
-# always the source of truth, no matter what is already in the environment.
-set -a
-# shellcheck disable=SC1090
-. "./$ENV_FILE"
-set +a
+# silently shadow the value in the file. Unset every variable name that .env.prod defines (not
+# its value - .env.prod isn't valid shell syntax, e.g. unquoted spaces in string values) so
+# nothing can shadow it and --env-file is always the source of truth.
+for _var_name in $(sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\1/p' "$ENV_FILE"); do
+    unset "$_var_name"
+done
 
 # LICENSE_SIGNING_KEY_DIR is read directly out of the env file here (rather than left to Compose)
 # so a missing key directory fails before any container starts, with a clear message.

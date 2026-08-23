@@ -10,7 +10,7 @@
   <PropertyGroup>
     <!-- Version is overridden by CI (-p:Version=X.Y.Z) at release build/pack time; this is only
          the local/dev fallback so an unversioned build still produces something sane. -->
-    <Version>0.3.2</Version>
+    <Version>0.3.3</Version>
     <PackageId>LicenseServer</PackageId>
     <Authors>RePass Cloud Pty Ltd</Authors>
     <Company>RePass Cloud Pty Ltd</Company>
@@ -25,10 +25,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Embedded so the templates load by assembly resource regardless of the process's
+         working directory or publish layout (test host, container, etc). -->
+    <EmbeddedResource Include="EmailTemplates\*.html" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="LicenseServer.Tests" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" />
     <PackageReference Include="Microsoft.AspNetCore.Diagnostics.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
@@ -36,6 +43,7 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <PackageReference Include="QRCoder" />
+    <PackageReference Include="QuestPDF" />
     <PackageReference Include="Stripe.net" />
   </ItemGroup>
 
