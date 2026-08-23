@@ -113,3 +113,94 @@ public sealed class InvoiceMoneyFormatterTests
         Assert.Equal(expected, InvoiceMoneyFormatter.Format(minorUnits, currency));
 }
 
+public sealed class InvoicePdfServiceTests
+{
+    [Fact]
+    public async Task GenerateAndStoreAsyncBuildsDocumentFromStripeDataAndStoresRenderedBytes()
+    {
+        var stripeData = new FakeInvoiceStripeDataProvider(new StripeInvoiceData(
+            Number: "INV-2002",
+            BillingPeriod: "1 Jan 2026 - 1 Jan 2027",
+            Subtotal: "$500.00",
+            TaxAmount: "$50.00",
+            Total: "$550.00",
+            PaymentMethodLabel: "Visa •••• 4242",
+            LineItems: [new InvoiceLineItemDisplay("Enterprise seats", "25", "$500.00")]));
+        var renderer = new FakeInvoicePdfRenderer([1, 2, 3]);
+        var storage = new FakeInvoiceStorage();
+        var service = new InvoicePdfService(stripeData, renderer, storage,
+            Microsoft.Extensions.Options.Options.Create(new InvoiceIssuerOptions
+            {
+                BusinessName = "RePass Cloud Pty Ltd",
+                BusinessAddress = "1 Example St",
+                BusinessAbn = "12 345 678 901",
+                BusinessEmail = "billing@repasscloud.com",
+                TaxLabel = "GST"
+            }),
+            TimeProvider.System);
+        var orderId = Guid.NewGuid();
+
+        var key = await service.GenerateAndStoreAsync(new InvoicePdfRequest(
+            orderId, "in_test_1", "Jane Buyer", "jane@example.test", "Acme Widget Pro", "Enterprise", 25));
+
+        Assert.Equal(InvoiceObjectKey.For(orderId), key);
+        Assert.Equal(key, storage.StoredKey);
+        Assert.Equal(new byte[] { 1, 2, 3 }, storage.StoredContent);
+        Assert.NotNull(renderer.CapturedData);
+        Assert.Equal("Acme Widget Pro", renderer.CapturedData!.ProductName);
+        Assert.Equal("$550.00", renderer.CapturedData.TotalDue);
+        Assert.Equal("GST", renderer.CapturedData.TaxLabel);
+        Assert.Equal("Jane Buyer", renderer.CapturedData.CustomerName);
+        Assert.Single(renderer.CapturedData.LineItems);
+    }
+
+    [Fact]
+    public async Task GenerateAndStoreAsyncThrowsWhenStripeDataIsUnavailable()
+    {
+        var service = new InvoicePdfService(
+            new FakeInvoiceStripeDataProvider(null),
+            new FakeInvoicePdfRenderer([1]),
+            new FakeInvoiceStorage(),
+            Microsoft.Extensions.Options.Options.Create(new InvoiceIssuerOptions()),
+            TimeProvider.System);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.GenerateAndStoreAsync(
+            new InvoicePdfRequest(Guid.NewGuid(), "in_missing", "Jane Buyer", "jane@example.test", "Product", "Edition", 1)));
+    }
+
+    private sealed class FakeInvoiceStripeDataProvider(StripeInvoiceData? data) : IInvoiceStripeDataProvider
+    {
+        public Task<StripeInvoiceData?> FetchAsync(string stripeInvoiceId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(data);
+    }
+
+    private sealed class FakeInvoicePdfRenderer(byte[] bytes) : IInvoicePdfRenderer
+    {
+        public InvoiceDocumentData? CapturedData { get; private set; }
+        public byte[] Render(InvoiceDocumentData data)
+        {
+            CapturedData = data;
+            return bytes;
+        }
+    }
+
+    private sealed class FakeInvoiceStorage : IInvoiceStorage
+    {
+        public string? StoredKey { get; private set; }
+        public byte[]? StoredContent { get; private set; }
+
+        public Task StoreAsync(string key, byte[] content, CancellationToken cancellationToken = default)
+        {
+            StoredKey = key;
+            StoredContent = content;
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) =>
+            Task.FromResult(StoredKey == key);
+
+        public Task<Uri> GetPresignedDownloadUrlAsync(string key, TimeSpan validFor, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new Uri($"https://example.test/{key}"));
+    }
+}
+
