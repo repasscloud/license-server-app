@@ -246,6 +246,8 @@ internal static class EmailTemplateRenderer
 {
     private static readonly ConcurrentDictionary<string, string> TemplateCache = new(StringComparer.Ordinal);
     private static readonly Regex PlaceholderPattern = new(@"\{\{(\w+)\}\}", RegexOptions.Compiled);
+    private static readonly Regex ConditionalBlockPattern = new(
+        @"\{\{#if (\w+)\}\}(.*?)\{\{/if\}\}", RegexOptions.Compiled | RegexOptions.Singleline);
     private static readonly Regex HeadPattern = new(@"<head[^>]*>.*?</head>", RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
     private static readonly Regex CommentPattern = new(@"<!--.*?-->", RegexOptions.Compiled | RegexOptions.Singleline);
     private static readonly Regex AnchorPattern = new(
@@ -260,7 +262,7 @@ internal static class EmailTemplateRenderer
         if (!template.HasHtmlTemplate)
             throw new InvalidOperationException(
                 $"Template '{template.Name}' has no HTML file; it must use the plain-text-only rendering path.");
-        return Substitute(LoadSource(template.Name), model);
+        return Substitute(ApplyConditionalBlocks(LoadSource(template.Name), model), model);
     }
 
     public static string RenderText(EmailTemplate template, IReadOnlyDictionary<string, string> model) =>
@@ -284,6 +286,17 @@ internal static class EmailTemplateRenderer
     private static string Substitute(string source, IReadOnlyDictionary<string, string> model) =>
         PlaceholderPattern.Replace(source, match =>
             model.TryGetValue(match.Groups[1].Value, out var value) ? value : string.Empty);
+
+    // Block-conditional behavior: a {{#if key}}...{{/if}} section (including its own markers) is
+    // removed entirely when the model has no non-empty value for key, and kept (markers stripped,
+    // content left in place for the ordinary token pass) otherwise. This is how a template drops a
+    // whole element - not just blanks a token - when optional data (e.g. an invoice PDF link) is
+    // absent, without every consumer needing its own if/else around QueueAsync's model dictionary.
+    private static string ApplyConditionalBlocks(string source, IReadOnlyDictionary<string, string> model) =>
+        ConditionalBlockPattern.Replace(source, match =>
+            model.TryGetValue(match.Groups[1].Value, out var value) && !string.IsNullOrEmpty(value)
+                ? match.Groups[2].Value
+                : string.Empty);
 
     private static string ToPlainText(string html)
     {

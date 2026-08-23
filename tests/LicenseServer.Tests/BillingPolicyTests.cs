@@ -355,6 +355,31 @@ public sealed class BillingPolicyTests(PostgresWebFixture fixture)
 
     [Fact]
     [Trait("ExpectedGreenStage", "15")]
+    public async Task RenewalSucceedsWhenPdfGenerationIsUnavailable()
+    {
+        var marker = Guid.NewGuid().ToString("N");
+        await using var scope = fixture.Factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await AddCatalogMappingsAsync(db, marker);
+        var processor = scope.ServiceProvider.GetRequiredService<StripeBillingPolicyProcessor>();
+        await processor.ApplyAsync(Purchase(marker));
+
+        var result = await processor.ApplyAsync(Purchase(marker) with
+        {
+            Kind = BillingEventKind.RenewalPaid,
+            EventId = $"evt_renew_pdf_{marker}",
+            InvoiceId = $"in_renew_pdf_{marker}",
+            CheckoutSessionId = null,
+            CurrentPeriodEnd = DateTimeOffset.UtcNow.AddYears(1)
+        });
+
+        Assert.Equal(BillingInboxStatus.Completed, result.Status);
+        Assert.Equal(1, await db.EmailOutbox.CountAsync(item => item.TemplateName == EmailTemplates.RenewalReceipt.Name
+            && item.RecipientHash == HashEmail($"buyer-{marker}@example.com")));
+    }
+
+    [Fact]
+    [Trait("ExpectedGreenStage", "15")]
     public async Task PaymentFailureUsesGraceAndRecoveryClearsItWithoutRevocation()
     {
         var marker = Guid.NewGuid().ToString("N");
@@ -566,5 +591,27 @@ public sealed class BillingPolicyTests(PostgresWebFixture fixture)
         var query = tracked ? db.StripeSubscriptionMappings.AsQueryable() : db.StripeSubscriptionMappings.AsNoTracking();
         return await query.Where(item => item.StripeSubscriptionId == $"sub_{marker}")
             .Select(item => item.BillingContract).SingleAsync();
+    }
+}
+
+public sealed class RenewalReceiptModelTests
+{
+    [Fact]
+    public void BuildIncludesInvoicePdfUrlWhenProvided()
+    {
+        var model = RenewalReceiptModel.Build("LIC-1", "https://example.test/invoices/x/pdf");
+
+        Assert.Equal("LIC-1", model["licenseId"]);
+        Assert.Equal("https://example.test/invoices/x/pdf", model["invoicePdfUrl"]);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void BuildOmitsInvoicePdfUrlWhenNullOrEmpty(string? invoicePdfUrl)
+    {
+        var model = RenewalReceiptModel.Build("LIC-1", invoicePdfUrl);
+
+        Assert.False(model.ContainsKey("invoicePdfUrl"));
     }
 }

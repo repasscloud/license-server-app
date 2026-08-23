@@ -14,12 +14,15 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.OpenApi;
+using QuestPDF.Infrastructure;
 using System.Net;
 using System.Security.Claims;
 using System.Text;
 using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
+
+QuestPDF.Settings.License = LicenseType.Community;
 
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase);
@@ -181,6 +184,12 @@ builder.Services.Configure<DataProtectionTokenProviderOptions>(options =>
 
 builder.Services.Configure<MailerSendOptions>(builder.Configuration.GetSection("MailerSend"));
 builder.Services.Configure<StripeOptions>(builder.Configuration.GetSection("Stripe"));
+builder.Services.Configure<R2Options>(builder.Configuration.GetSection("R2"));
+builder.Services.Configure<InvoiceIssuerOptions>(builder.Configuration.GetSection("Invoice"));
+builder.Services.AddSingleton<IInvoiceStorage, R2InvoiceStorage>();
+builder.Services.AddScoped<IInvoiceStripeDataProvider, StripeInvoiceDataProvider>();
+builder.Services.AddScoped<IInvoicePdfRenderer, InvoicePdfRenderer>();
+builder.Services.AddScoped<IInvoicePdfService, InvoicePdfService>();
 builder.Services.AddOptions<BillingWorkerOptions>()
     .BindConfiguration("Billing")
     .Validate(options => options.BatchSize is >= 1 and <= 100, "Billing:BatchSize must be between 1 and 100.")
@@ -666,6 +675,16 @@ app.MapGet("/customer/access/consume", async (
     });
     return Results.Redirect("/customer/portal");
 }).AllowAnonymous();
+
+app.MapGet("/invoices/{orderId:guid}/pdf", async (Guid orderId, IInvoiceStorage storage, CancellationToken ct) =>
+{
+    var key = InvoiceObjectKey.For(orderId);
+    if (!await storage.ExistsAsync(key, ct))
+        return Results.NotFound();
+    var url = await storage.GetPresignedDownloadUrlAsync(key, TimeSpan.FromMinutes(10), ct);
+    return Results.Redirect(url.ToString());
+}).AllowAnonymous().RequireRateLimiting("device-api")
+  .WithDescription("Redirects to a short-lived presigned R2 URL for this order's invoice PDF. The order GUID is the bearer token, matching the customer magic-link trust model.");
 
 var customerApi = app.MapGroup("/api/v1/customer").RequireAuthorization(new AuthorizeAttribute
 {

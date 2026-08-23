@@ -82,6 +82,68 @@ public sealed class EmailTemplateRenderingTests
         var html = EmailTemplateRenderer.RenderHtml(template, new Dictionary<string, string>());
         Assert.False(string.IsNullOrWhiteSpace(html));
     }
+
+    [Fact]
+    public void RenderHtmlDropsConditionalBlockWhenModelKeyIsMissing()
+    {
+        var html = EmailTemplateRenderer.RenderHtml(EmailTemplates.RenewalReceipt, new Dictionary<string, string>
+        {
+            ["licenseId"] = "LIC-9001"
+        });
+
+        Assert.DoesNotContain("Download invoice", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("{{#if", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("{{/if}}", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderHtmlDropsConditionalBlockWhenModelKeyIsEmpty()
+    {
+        var html = EmailTemplateRenderer.RenderHtml(EmailTemplates.RenewalReceipt, new Dictionary<string, string>
+        {
+            ["licenseId"] = "LIC-9001",
+            ["invoicePdfUrl"] = ""
+        });
+
+        Assert.DoesNotContain("Download invoice", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderHtmlKeepsConditionalBlockWhenModelKeyIsPresent()
+    {
+        var html = EmailTemplateRenderer.RenderHtml(EmailTemplates.RenewalReceipt, new Dictionary<string, string>
+        {
+            ["licenseId"] = "LIC-9001",
+            ["invoicePdfUrl"] = "https://example.test/invoices/abc/pdf"
+        });
+
+        Assert.Contains("Download invoice", html, StringComparison.Ordinal);
+        Assert.Contains("https://example.test/invoices/abc/pdf", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("{{#if", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("{{/if}}", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderHtmlDropsInvoiceDownloadButtonWhenActionUrlIsMissing()
+    {
+        var html = EmailTemplateRenderer.RenderHtml(EmailTemplates.Invoice, new Dictionary<string, string>());
+
+        Assert.DoesNotContain("Download invoice", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("{{#if", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("{{/if}}", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderHtmlKeepsInvoiceDownloadButtonWhenActionUrlIsPresent()
+    {
+        var html = EmailTemplateRenderer.RenderHtml(EmailTemplates.Invoice, new Dictionary<string, string>
+        {
+            ["actionUrl"] = "https://example.test/invoices/abc/pdf"
+        });
+
+        Assert.Contains("Download invoice", html, StringComparison.Ordinal);
+        Assert.Contains("https://example.test/invoices/abc/pdf", html, StringComparison.Ordinal);
+    }
 }
 
 public sealed class MailerSendEmailTransportTests
