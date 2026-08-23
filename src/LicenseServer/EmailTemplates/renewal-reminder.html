@@ -1,0 +1,70 @@
+<!--
+  Template: renewal-reminder (v1)
+  Model tokens: {{productName}}, {{editionName}}, {{licenseId}}, {{expiryDate}}, {{daysRemaining}}, {{actionUrl}}
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Your license renewal is approaching</title>
+</head>
+<body style="margin:0;padding:0;background-color:#eef1f6;font-family:Segoe UI,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#eef1f6;padding:32px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(16,24,40,.08);">
+          <tr>
+            <td style="background:linear-gradient(135deg,#0f172a,#1e293b);padding:28px 32px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="color:#ffffff;font-size:16px;font-weight:700;letter-spacing:.02em;">License Server</td>
+                  <td align="right" style="color:#fcd34d;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;">Renewal due</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 32px 8px;">
+              <p style="margin:0 0 6px;font-size:12px;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:.06em;">{{daysRemaining}} days left</p>
+              <h1 style="margin:0 0 12px;font-size:22px;color:#0f172a;">{{productName}} is expiring soon</h1>
+              <p style="margin:0 0 24px;font-size:14px;line-height:1.6;color:#475569;">
+                Your <strong>{{editionName}}</strong> license expires on <strong>{{expiryDate}}</strong>. Renew now
+                to keep it active without interruption.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 32px 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:8px;">
+                <tr>
+                  <td style="padding:16px 20px;">
+                    <p style="margin:0 0 6px;font-size:12px;color:#64748b;">License ID</p>
+                    <p style="margin:0;font-size:14px;font-family:Consolas,Menlo,monospace;color:#0f172a;">{{licenseId}}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 32px 32px;">
+              <table role="presentation" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="border-radius:6px;background-color:#0f172a;">
+                    <a href="{{actionUrl}}" style="display:inline-block;padding:12px 24px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;">Renew license</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:18px 32px;background-color:#f8fafc;border-top:1px solid #eef1f6;">
+              <p style="margin:0;font-size:12px;color:#94a3b8;">This is an automated message, please do not reply.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

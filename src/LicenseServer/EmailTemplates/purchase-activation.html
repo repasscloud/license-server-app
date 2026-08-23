@@ -1,0 +1,149 @@
+<!--
+  Template: purchase-activation (v1)
+  Model tokens:
+    {{productName}}      - e.g. "Acme Widget Pro"
+    {{editionName}}      - e.g. "Community" / "Professional" / "Enterprise"
+    {{seatCount}}         - number of seats included
+    {{licenseId}}
+    {{activationCode}}
+    {{expiryDate}}        - "Never" for perpetual licenses
+    {{machineWideUrl}}    - link to the contact-support page, prefilled to request a machine-wide code
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Your license activation details</title>
+</head>
+<body style="margin:0;padding:0;background-color:#eef1f6;font-family:Segoe UI,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#eef1f6;padding:32px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background-color:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(16,24,40,.08);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#0f172a,#1e293b);padding:28px 32px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="color:#ffffff;font-size:16px;font-weight:700;letter-spacing:.02em;">License Server</td>
+                  <td align="right" style="color:#93c5fd;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;">Activation</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Hero -->
+          <tr>
+            <td style="padding:32px 32px 8px;">
+              <p style="margin:0 0 6px;font-size:12px;font-weight:700;color:#2563eb;text-transform:uppercase;letter-spacing:.06em;">Purchase confirmed</p>
+              <h1 style="margin:0 0 12px;font-size:22px;line-height:1.3;color:#0f172a;">{{productName}}</h1>
+              <p style="margin:0 0 24px;font-size:14px;line-height:1.6;color:#475569;">
+                Thanks for your purchase — your license is ready to activate. Full details and your
+                activation code are below.
+              </p>
+            </td>
+          </tr>
+
+          <!-- License summary card -->
+          <tr>
+            <td style="padding:0 32px 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:8px;">
+                <tr>
+                  <td style="padding:18px 20px;border-bottom:1px solid #eef1f6;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td style="font-size:12px;color:#64748b;">Edition</td>
+                        <td align="right">
+                          <span style="display:inline-block;padding:3px 10px;border-radius:999px;background-color:#dbeafe;color:#1d4ed8;font-size:12px;font-weight:700;">{{editionName}}</span>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:16px 20px;border-bottom:1px solid #eef1f6;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td width="50%" style="font-size:12px;color:#64748b;padding-bottom:4px;">Seats included</td>
+                        <td width="50%" style="font-size:12px;color:#64748b;padding-bottom:4px;">Expires</td>
+                      </tr>
+                      <tr>
+                        <td style="font-size:14px;font-weight:600;color:#0f172a;">{{seatCount}}</td>
+                        <td style="font-size:14px;font-weight:600;color:#0f172a;">{{expiryDate}}</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:16px 20px;">
+                    <p style="margin:0 0 6px;font-size:12px;color:#64748b;">License ID</p>
+                    <p style="margin:0;font-size:14px;font-family:Consolas,Menlo,monospace;color:#0f172a;">{{licenseId}}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Activation code -->
+          <tr>
+            <td style="padding:0 32px 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#0f172a;border-radius:8px;">
+                <tr>
+                  <td style="padding:20px;text-align:center;">
+                    <p style="margin:0 0 8px;font-size:11px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:.08em;">Activation code</p>
+                    <p style="margin:0;font-size:22px;font-weight:700;letter-spacing:.08em;font-family:Consolas,Menlo,monospace;color:#ffffff;">{{activationCode}}</p>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:10px 0 0;font-size:12px;line-height:1.6;color:#94a3b8;">
+                Enter this code in the application when prompted to bind it to your license.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Machine-wide activation instructions -->
+          <tr>
+            <td style="padding:0 32px 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+                <tr>
+                  <td style="padding:18px 20px;">
+                    <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#0f172a;">Deploying to multiple machines?</p>
+                    <p style="margin:0 0 12px;font-size:13px;line-height:1.6;color:#475569;">
+                      Deploying to a shared workstation image, virtual desktop pool, or offline environment?
+                      Contact us and quote license ID <strong>{{licenseId}}</strong> to request a machine-wide
+                      activation code.
+                    </p>
+                    <table role="presentation" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td style="border-radius:6px;background-color:#0f172a;">
+                          <a href="{{machineWideUrl}}" style="display:inline-block;padding:10px 18px;font-size:13px;font-weight:600;color:#ffffff;text-decoration:none;">Request machine-wide code</a>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 32px 32px;">
+              <p style="margin:0;font-size:12px;line-height:1.6;color:#94a3b8;">
+                Keep your activation code private. If you did not make this purchase, contact support immediately.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:18px 32px;background-color:#f8fafc;border-top:1px solid #eef1f6;">
+              <p style="margin:0;font-size:12px;color:#94a3b8;">This is an automated message, please do not reply.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
