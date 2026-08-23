@@ -4,11 +4,13 @@
 @inject UserAdministrationService UserService
 @inject AuthenticationStateProvider AuthenticationState
 @inject NavigationManager Navigation
+@inject IAuthorizationService AuthorizationService
 
 <PageTitle>Users</PageTitle>
 <div class="page-heading"><div><p class="eyebrow">Security</p><h1>Operators and service accounts</h1><p>Invite people, create non-interactive automation identities, inspect roles and permissions, and revoke access.</p></div></div>
 
 @if (message is not null) { <div class="alert @(isError ? "error" : "success")" role="status">@message</div> }
+@if (showMfaRequiredNotice) { <div class="alert error" role="status">Managing users requires multi-factor authentication on your account. <a href="/Account/Manage/TwoFactorAuthentication">Enable MFA</a> to unlock these actions.</div> }
 
 <form method="get" class="filters"><label>Search<input name="search" value="@Search" placeholder="Email or account type" /></label><button class="button secondary" type="submit">Search</button></form>
 
@@ -36,8 +38,16 @@
     private readonly UserForm create = new();
     private string? message;
     private bool isError;
+    private bool showMfaRequiredNotice;
 
-    protected override async Task OnParametersSetAsync() => items = await UserService.SearchAsync(Search);
+    protected override async Task OnParametersSetAsync()
+    {
+        items = await UserService.SearchAsync(Search);
+        var user = (await AuthenticationState.GetAuthenticationStateAsync()).User;
+        var hasPermission = user.HasClaim(Permissions.ClaimType, Permissions.UsersManage);
+        var authorized = (await AuthorizationService.AuthorizeAsync(user, Permissions.UsersManage)).Succeeded;
+        showMfaRequiredNotice = hasPermission && !authorized;
+    }
     private async Task<string> ActorAsync() => (await AuthenticationState.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";
 
     private async Task CreateAsync() => await ExecuteAsync(async () =>
