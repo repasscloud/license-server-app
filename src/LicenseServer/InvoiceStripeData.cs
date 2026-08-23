@@ -10,6 +10,7 @@ internal sealed record StripeInvoiceData(
     string DueDate,
     string BillingPeriod,
     string Subtotal,
+    string DiscountAmount,
     string TaxAmount,
     string Total,
     string PaymentMethodLabel,
@@ -74,6 +75,7 @@ internal sealed class StripeInvoiceDataProvider : IInvoiceStripeDataProvider
             DueDate: FormatDate(invoice.DueDate ?? invoice.Created),
             BillingPeriod: $"{invoice.PeriodStart:d MMM yyyy} - {invoice.PeriodEnd:d MMM yyyy}",
             Subtotal: InvoiceMoneyFormatter.Format(invoice.Subtotal, currency),
+            DiscountAmount: FormatDiscount(invoice.TotalDiscountAmounts, currency),
             TaxAmount: InvoiceMoneyFormatter.Format(SumTaxAmount(invoice.TotalTaxes), currency),
             Total: InvoiceMoneyFormatter.Format(invoice.Total, currency),
             PaymentMethodLabel: card is not null
@@ -96,6 +98,20 @@ internal sealed class StripeInvoiceDataProvider : IInvoiceStripeDataProvider
     // amounts from Stripe's own totals are summed instead.
     internal static long SumTaxAmount(IEnumerable<InvoiceTotalTax>? totalTaxes) =>
         totalTaxes?.Sum(tax => tax.Amount) ?? 0;
+
+    // Purchases here are single-product, not multi-line-item, so there is nothing to itemize per
+    // discount - only a total. Extracted (like SumTaxAmount) so it's unit-testable without a live
+    // Stripe call.
+    internal static long SumDiscountAmount(IEnumerable<InvoiceDiscountAmount>? totalDiscountAmounts) =>
+        totalDiscountAmounts?.Sum(discount => discount.Amount) ?? 0;
+
+    // Renders as empty (not "$0.00") when no discount was applied, so InvoicePdfRenderer can omit
+    // the whole discount line rather than always showing a zero row on every invoice.
+    private static string FormatDiscount(IEnumerable<InvoiceDiscountAmount>? totalDiscountAmounts, string currency)
+    {
+        var amount = SumDiscountAmount(totalDiscountAmounts);
+        return amount > 0 ? $"-{InvoiceMoneyFormatter.Format(amount, currency)}" : string.Empty;
+    }
 
     private static string FormatDate(DateTime value) => value.ToString("d MMM yyyy", CultureInfo.InvariantCulture);
 

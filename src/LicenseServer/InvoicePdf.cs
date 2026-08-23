@@ -22,6 +22,7 @@ internal sealed record InvoiceDocumentData(
     string BillingPeriod,
     IReadOnlyList<InvoiceLineItemDisplay> LineItems,
     string Subtotal,
+    string DiscountAmount,
     string TaxLabel,
     string TaxAmount,
     string TotalDue,
@@ -90,6 +91,11 @@ internal sealed class InvoicePdfRenderer : IInvoicePdfRenderer
                         }
                     });
                     column.Item().AlignRight().Text($"Subtotal: {data.Subtotal}");
+                    // Discounts are per-purchase, not per-line-item, and rare: only shown when
+                    // one was actually applied to this invoice, rather than always printing a
+                    // zero/blank discount row.
+                    if (!string.IsNullOrEmpty(data.DiscountAmount))
+                        column.Item().AlignRight().Text($"Discount: {data.DiscountAmount}");
                     column.Item().AlignRight().Text($"{data.TaxLabel}: {data.TaxAmount}");
                     column.Item().AlignRight().Text($"Total due: {data.TotalDue}").Bold();
                     column.Item().Text($"Charged to {data.PaymentMethodLabel}");

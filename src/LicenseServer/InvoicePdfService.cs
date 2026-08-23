@@ -57,6 +57,7 @@ internal sealed class InvoicePdfService(
             BillingPeriod: stripeInvoice.BillingPeriod,
             LineItems: stripeInvoice.LineItems,
             Subtotal: stripeInvoice.Subtotal,
+            DiscountAmount: stripeInvoice.DiscountAmount,
             TaxLabel: issuer.TaxLabel,
             TaxAmount: stripeInvoice.TaxAmount,
             TotalDue: stripeInvoice.Total,

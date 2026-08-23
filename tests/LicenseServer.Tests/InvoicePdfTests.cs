@@ -29,6 +29,18 @@ public sealed class InvoicePdfRendererTests
         Assert.Equal("%PDF", System.Text.Encoding.ASCII.GetString(bytes, 0, 4));
     }
 
+    [Fact]
+    public void RenderProducesAValidPdfWithADiscountApplied()
+    {
+        var renderer = new InvoicePdfRenderer();
+        var data = SampleData() with { DiscountAmount = "-$25.00" };
+
+        var bytes = renderer.Render(data);
+
+        Assert.True(bytes.Length > 100);
+        Assert.Equal("%PDF", System.Text.Encoding.ASCII.GetString(bytes, 0, 4));
+    }
+
     internal static InvoiceDocumentData SampleData() => new(
         InvoiceId: "INV-1001",
         InvoiceDate: "1 Jan 2026",
@@ -46,6 +58,7 @@ public sealed class InvoicePdfRendererTests
         BillingPeriod: "1 Jan 2026 - 1 Jan 2027",
         LineItems: [new InvoiceLineItemDisplay("Enterprise seats", "25", "$500.00")],
         Subtotal: "$500.00",
+        DiscountAmount: "",
         TaxLabel: "GST",
         TaxAmount: "$50.00",
         TotalDue: "$550.00",
@@ -133,6 +146,25 @@ public sealed class StripeInvoiceDataProviderTests
         Assert.Equal(0, StripeInvoiceDataProvider.SumTaxAmount(null));
         Assert.Equal(0, StripeInvoiceDataProvider.SumTaxAmount(new List<Stripe.InvoiceTotalTax>()));
     }
+
+    [Fact]
+    public void SumDiscountAmountAddsMultipleDiscountsCorrectly()
+    {
+        var discounts = new List<Stripe.InvoiceDiscountAmount>
+        {
+            new() { Amount = 500 },
+            new() { Amount = 250 }
+        };
+
+        Assert.Equal(750, StripeInvoiceDataProvider.SumDiscountAmount(discounts));
+    }
+
+    [Fact]
+    public void SumDiscountAmountReturnsZeroForNullOrEmpty()
+    {
+        Assert.Equal(0, StripeInvoiceDataProvider.SumDiscountAmount(null));
+        Assert.Equal(0, StripeInvoiceDataProvider.SumDiscountAmount(new List<Stripe.InvoiceDiscountAmount>()));
+    }
 }
 
 public sealed class InvoicePdfServiceTests
@@ -146,8 +178,9 @@ public sealed class InvoicePdfServiceTests
             DueDate: "15 Jan 2026",
             BillingPeriod: "1 Jan 2026 - 1 Jan 2027",
             Subtotal: "$500.00",
+            DiscountAmount: "-$25.00",
             TaxAmount: "$50.00",
-            Total: "$550.00",
+            Total: "$525.00",
             PaymentMethodLabel: "Visa •••• 4242",
             LineItems: [new InvoiceLineItemDisplay("Enterprise seats", "25", "$500.00")]));
         var renderer = new FakeInvoicePdfRenderer([1, 2, 3]);
@@ -171,7 +204,8 @@ public sealed class InvoicePdfServiceTests
         Assert.Equal(new byte[] { 1, 2, 3 }, storage.StoredContent);
         Assert.NotNull(renderer.CapturedData);
         Assert.Equal("Acme Widget Pro", renderer.CapturedData!.ProductName);
-        Assert.Equal("$550.00", renderer.CapturedData.TotalDue);
+        Assert.Equal("$525.00", renderer.CapturedData.TotalDue);
+        Assert.Equal("-$25.00", renderer.CapturedData.DiscountAmount);
         Assert.Equal("GST", renderer.CapturedData.TaxLabel);
         Assert.Equal("Jane Buyer", renderer.CapturedData.CustomerName);
         Assert.Equal("1 Jan 2026", renderer.CapturedData.InvoiceDate);
