@@ -101,3 +101,15 @@ public sealed class R2InvoiceStorageTests
     }
 }
 
+public sealed class InvoiceMoneyFormatterTests
+{
+    [Theory]
+    [InlineData(55000, "aud", "$550.00")]
+    [InlineData(999, "usd", "$9.99")]
+    [InlineData(100, "eur", "€1.00")]
+    [InlineData(100, "gbp", "£1.00")]
+    [InlineData(500, "xyz", "XYZ 5.00")]
+    public void FormatRendersMinorUnitsWithACurrencySymbol(long minorUnits, string currency, string expected) =>
+        Assert.Equal(expected, InvoiceMoneyFormatter.Format(minorUnits, currency));
+}
+
