@@ -1,4 +1,3 @@
-using System.Globalization;
 using Microsoft.Extensions.Options;
 
 namespace LicenseServer;
@@ -33,8 +32,7 @@ internal sealed class InvoicePdfService(
     IInvoiceStripeDataProvider stripeData,
     IInvoicePdfRenderer renderer,
     IInvoiceStorage storage,
-    IOptions<InvoiceIssuerOptions> issuerOptions,
-    TimeProvider clock) : IInvoicePdfService
+    IOptions<InvoiceIssuerOptions> issuerOptions) : IInvoicePdfService
 {
     public async Task<string> GenerateAndStoreAsync(InvoicePdfRequest request, CancellationToken cancellationToken = default)
     {
@@ -42,11 +40,10 @@ internal sealed class InvoicePdfService(
             ?? throw new InvalidOperationException(
                 $"Stripe invoice '{request.StripeInvoiceId}' could not be retrieved for PDF generation.");
         var issuer = issuerOptions.Value;
-        var now = clock.GetUtcNow();
         var document = new InvoiceDocumentData(
             InvoiceId: stripeInvoice.Number,
-            InvoiceDate: now.ToString("d MMM yyyy", CultureInfo.InvariantCulture),
-            DueDate: now.ToString("d MMM yyyy", CultureInfo.InvariantCulture),
+            InvoiceDate: stripeInvoice.InvoiceDate,
+            DueDate: stripeInvoice.DueDate,
             BusinessName: issuer.BusinessName ?? string.Empty,
             BusinessAddress: issuer.BusinessAddress ?? string.Empty,
             BusinessAbn: issuer.BusinessAbn ?? string.Empty,

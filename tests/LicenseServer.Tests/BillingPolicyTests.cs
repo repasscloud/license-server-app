@@ -355,7 +355,7 @@ public sealed class BillingPolicyTests(PostgresWebFixture fixture)
 
     [Fact]
     [Trait("ExpectedGreenStage", "15")]
-    public async Task RenewalSucceedsAndOmitsInvoicePdfUrlWhenPdfGenerationIsUnavailable()
+    public async Task RenewalSucceedsWhenPdfGenerationIsUnavailable()
     {
         var marker = Guid.NewGuid().ToString("N");
         await using var scope = fixture.Factory.Services.CreateAsyncScope();

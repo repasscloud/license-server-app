@@ -122,6 +122,28 @@ public sealed class EmailTemplateRenderingTests
         Assert.DoesNotContain("{{#if", html, StringComparison.Ordinal);
         Assert.DoesNotContain("{{/if}}", html, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void RenderHtmlDropsInvoiceDownloadButtonWhenActionUrlIsMissing()
+    {
+        var html = EmailTemplateRenderer.RenderHtml(EmailTemplates.Invoice, new Dictionary<string, string>());
+
+        Assert.DoesNotContain("Download invoice", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("{{#if", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("{{/if}}", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderHtmlKeepsInvoiceDownloadButtonWhenActionUrlIsPresent()
+    {
+        var html = EmailTemplateRenderer.RenderHtml(EmailTemplates.Invoice, new Dictionary<string, string>
+        {
+            ["actionUrl"] = "https://example.test/invoices/abc/pdf"
+        });
+
+        Assert.Contains("Download invoice", html, StringComparison.Ordinal);
+        Assert.Contains("https://example.test/invoices/abc/pdf", html, StringComparison.Ordinal);
+    }
 }
 
 public sealed class MailerSendEmailTransportTests

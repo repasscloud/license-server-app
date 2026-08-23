@@ -414,13 +414,21 @@ internal sealed class StripeBillingPolicyProcessor(
     {
         try
         {
+            // Bounded: this runs inside RenewalAsync's advisory-lock transaction, so a slow Stripe/R2
+            // call must not stall other billing events indefinitely. A timeout here throws
+            // TimeoutException (not OperationCanceledException), so it's still caught below as an
+            // ordinary PDF-generation failure rather than escaping past the filter as a cancellation.
             await invoicePdf.GenerateAndStoreAsync(new InvoicePdfRequest(
-                order.Id, snapshot.InvoiceId!, contract.Customer!.Name, contract.Customer!.Email,
-                product.DisplayName, contract.Edition, contract.Seats), cancellationToken);
+                    order.Id, snapshot.InvoiceId!, contract.Customer!.Name, contract.Customer!.Email,
+                    product.DisplayName, contract.Edition, contract.Seats), cancellationToken)
+                .WaitAsync(TimeSpan.FromSeconds(20), cancellationToken);
             var publicBaseUrl = configuration["CustomerPortal:PublicBaseUrl"]?.TrimEnd('/')
                 ?? (environment.IsDevelopment()
                     ? "http://localhost:8080"
                     : throw new InvalidOperationException("CustomerPortal:PublicBaseUrl is required outside Development."));
+            // order.Id is the same value InvoicePdfService used to derive the R2 object key
+            // (InvoiceObjectKey.For) - the download route and the storage key must both stay
+            // derived from this one id, or every emailed link 404s.
             return $"{publicBaseUrl}/invoices/{order.Id}/pdf";
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

@@ -186,7 +186,7 @@ builder.Services.Configure<MailerSendOptions>(builder.Configuration.GetSection("
 builder.Services.Configure<StripeOptions>(builder.Configuration.GetSection("Stripe"));
 builder.Services.Configure<R2Options>(builder.Configuration.GetSection("R2"));
 builder.Services.Configure<InvoiceIssuerOptions>(builder.Configuration.GetSection("Invoice"));
-builder.Services.AddScoped<IInvoiceStorage, R2InvoiceStorage>();
+builder.Services.AddSingleton<IInvoiceStorage, R2InvoiceStorage>();
 builder.Services.AddScoped<IInvoiceStripeDataProvider, StripeInvoiceDataProvider>();
 builder.Services.AddScoped<IInvoicePdfRenderer, InvoicePdfRenderer>();
 builder.Services.AddScoped<IInvoicePdfService, InvoicePdfService>();
@@ -683,7 +683,7 @@ app.MapGet("/invoices/{orderId:guid}/pdf", async (Guid orderId, IInvoiceStorage 
         return Results.NotFound();
     var url = await storage.GetPresignedDownloadUrlAsync(key, TimeSpan.FromMinutes(10), ct);
     return Results.Redirect(url.ToString());
-}).AllowAnonymous()
+}).AllowAnonymous().RequireRateLimiting("device-api")
   .WithDescription("Redirects to a short-lived presigned R2 URL for this order's invoice PDF. The order GUID is the bearer token, matching the customer magic-link trust model.");
 
 var customerApi = app.MapGroup("/api/v1/customer").RequireAuthorization(new AuthorizeAttribute

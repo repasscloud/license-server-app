@@ -68,7 +68,7 @@ public sealed class R2InvoiceStorageTests
     [Fact]
     public async Task ExistsAsyncReturnsFalseWhenR2IsNotConfigured()
     {
-        var storage = new R2InvoiceStorage(Microsoft.Extensions.Options.Options.Create(new R2Options()));
+        var storage = new R2InvoiceStorage(Microsoft.Extensions.Options.Options.Create(new R2Options()), TimeProvider.System);
 
         Assert.False(await storage.ExistsAsync("invoices/missing.pdf"));
     }
@@ -76,7 +76,7 @@ public sealed class R2InvoiceStorageTests
     [Fact]
     public async Task StoreAsyncThrowsWhenR2IsNotConfigured()
     {
-        var storage = new R2InvoiceStorage(Microsoft.Extensions.Options.Options.Create(new R2Options()));
+        var storage = new R2InvoiceStorage(Microsoft.Extensions.Options.Options.Create(new R2Options()), TimeProvider.System);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => storage.StoreAsync("invoices/x.pdf", [1, 2, 3]));
     }
@@ -90,7 +90,7 @@ public sealed class R2InvoiceStorageTests
             AccessKeyId = "AKIDTEST",
             SecretAccessKey = "secret-test-key",
             BucketName = "invoices-test"
-        }));
+        }), TimeProvider.System);
 
         var url = await storage.GetPresignedDownloadUrlAsync("invoices/abc.pdf", TimeSpan.FromMinutes(10));
 
@@ -113,6 +113,28 @@ public sealed class InvoiceMoneyFormatterTests
         Assert.Equal(expected, InvoiceMoneyFormatter.Format(minorUnits, currency));
 }
 
+public sealed class StripeInvoiceDataProviderTests
+{
+    [Fact]
+    public void SumTaxAmountAddsMultipleTaxRatesCorrectly()
+    {
+        var taxes = new List<Stripe.InvoiceTotalTax>
+        {
+            new() { Amount = 500 },
+            new() { Amount = 250 }
+        };
+
+        Assert.Equal(750, StripeInvoiceDataProvider.SumTaxAmount(taxes));
+    }
+
+    [Fact]
+    public void SumTaxAmountReturnsZeroForNullOrEmpty()
+    {
+        Assert.Equal(0, StripeInvoiceDataProvider.SumTaxAmount(null));
+        Assert.Equal(0, StripeInvoiceDataProvider.SumTaxAmount(new List<Stripe.InvoiceTotalTax>()));
+    }
+}
+
 public sealed class InvoicePdfServiceTests
 {
     [Fact]
@@ -120,6 +142,8 @@ public sealed class InvoicePdfServiceTests
     {
         var stripeData = new FakeInvoiceStripeDataProvider(new StripeInvoiceData(
             Number: "INV-2002",
+            InvoiceDate: "1 Jan 2026",
+            DueDate: "15 Jan 2026",
             BillingPeriod: "1 Jan 2026 - 1 Jan 2027",
             Subtotal: "$500.00",
             TaxAmount: "$50.00",
@@ -136,8 +160,7 @@ public sealed class InvoicePdfServiceTests
                 BusinessAbn = "12 345 678 901",
                 BusinessEmail = "billing@repasscloud.com",
                 TaxLabel = "GST"
-            }),
-            TimeProvider.System);
+            }));
         var orderId = Guid.NewGuid();
 
         var key = await service.GenerateAndStoreAsync(new InvoicePdfRequest(
@@ -151,6 +174,8 @@ public sealed class InvoicePdfServiceTests
         Assert.Equal("$550.00", renderer.CapturedData.TotalDue);
         Assert.Equal("GST", renderer.CapturedData.TaxLabel);
         Assert.Equal("Jane Buyer", renderer.CapturedData.CustomerName);
+        Assert.Equal("1 Jan 2026", renderer.CapturedData.InvoiceDate);
+        Assert.Equal("15 Jan 2026", renderer.CapturedData.DueDate);
         Assert.Single(renderer.CapturedData.LineItems);
     }
 
@@ -161,8 +186,7 @@ public sealed class InvoicePdfServiceTests
             new FakeInvoiceStripeDataProvider(null),
             new FakeInvoicePdfRenderer([1]),
             new FakeInvoiceStorage(),
-            Microsoft.Extensions.Options.Options.Create(new InvoiceIssuerOptions()),
-            TimeProvider.System);
+            Microsoft.Extensions.Options.Options.Create(new InvoiceIssuerOptions()));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.GenerateAndStoreAsync(
             new InvoicePdfRequest(Guid.NewGuid(), "in_missing", "Jane Buyer", "jane@example.test", "Product", "Edition", 1)));

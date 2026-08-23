@@ -6,6 +6,8 @@ namespace LicenseServer;
 
 internal sealed record StripeInvoiceData(
     string Number,
+    string InvoiceDate,
+    string DueDate,
     string BillingPeriod,
     string Subtotal,
     string TaxAmount,
@@ -53,10 +55,13 @@ internal sealed class StripeInvoiceDataProvider : IInvoiceStripeDataProvider
         if (client is null) return null;
         var service = new InvoiceService(client);
         var invoice = await service.GetAsync(stripeInvoiceId,
-            new InvoiceGetOptions { Expand = ["default_payment_method"] },
+            new InvoiceGetOptions
+            {
+                Expand = ["default_payment_method", "payments.data.payment.payment_intent.payment_method"]
+            },
             cancellationToken: cancellationToken);
         var currency = invoice.Currency;
-        var card = invoice.DefaultPaymentMethod?.Card;
+        var card = ResolvePaymentMethodCard(invoice);
         var lineItems = invoice.Lines.Data
             .Select(line => new InvoiceLineItemDisplay(
                 line.Description ?? string.Empty,
@@ -65,15 +70,34 @@ internal sealed class StripeInvoiceDataProvider : IInvoiceStripeDataProvider
             .ToList();
         return new StripeInvoiceData(
             Number: invoice.Number ?? invoice.Id,
+            InvoiceDate: FormatDate(invoice.Created),
+            DueDate: FormatDate(invoice.DueDate ?? invoice.Created),
             BillingPeriod: $"{invoice.PeriodStart:d MMM yyyy} - {invoice.PeriodEnd:d MMM yyyy}",
             Subtotal: InvoiceMoneyFormatter.Format(invoice.Subtotal, currency),
-            TaxAmount: InvoiceMoneyFormatter.Format(invoice.Total - invoice.Subtotal, currency),
+            TaxAmount: InvoiceMoneyFormatter.Format(SumTaxAmount(invoice.TotalTaxes), currency),
             Total: InvoiceMoneyFormatter.Format(invoice.Total, currency),
             PaymentMethodLabel: card is not null
                 ? $"{CapitalizeBrand(card.Brand)} •••• {card.Last4}"
                 : "Payment on file",
             LineItems: lineItems);
     }
+
+    // A paid invoice's actual charged card usually lives on its Payments collection, not
+    // DefaultPaymentMethod (which is only set when explicitly overridden on the invoice - renewals
+    // normally leave it null and inherit from the subscription/customer instead).
+    private static PaymentMethodCard? ResolvePaymentMethodCard(Invoice invoice) =>
+        invoice.Payments?.Data?
+            .Select(payment => payment.Payment?.PaymentIntent?.PaymentMethod?.Card)
+            .FirstOrDefault(card => card is not null)
+        ?? invoice.DefaultPaymentMethod?.Card;
+
+    // Extracted so the summation logic is unit-testable without a live Stripe call: Total - Subtotal
+    // is wrong whenever a discount/coupon is applied (can go negative), so the real per-tax-rate
+    // amounts from Stripe's own totals are summed instead.
+    internal static long SumTaxAmount(IEnumerable<InvoiceTotalTax>? totalTaxes) =>
+        totalTaxes?.Sum(tax => tax.Amount) ?? 0;
+
+    private static string FormatDate(DateTime value) => value.ToString("d MMM yyyy", CultureInfo.InvariantCulture);
 
     private static string CapitalizeBrand(string brand) =>
         string.IsNullOrEmpty(brand) ? "Card" : char.ToUpperInvariant(brand[0]) + brand[1..];

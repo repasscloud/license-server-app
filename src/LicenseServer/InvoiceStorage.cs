@@ -34,9 +34,11 @@ internal sealed class R2InvoiceStorage : IInvoiceStorage, IDisposable
 {
     private readonly AmazonS3Client? client;
     private readonly string? bucketName;
+    private readonly TimeProvider clock;
 
-    public R2InvoiceStorage(IOptions<R2Options> options)
+    public R2InvoiceStorage(IOptions<R2Options> options, TimeProvider clock)
     {
+        this.clock = clock;
         var configured = options.Value;
         bucketName = configured.BucketName;
         if (string.IsNullOrWhiteSpace(configured.AccountId)
@@ -48,7 +50,8 @@ internal sealed class R2InvoiceStorage : IInvoiceStorage, IDisposable
         {
             ServiceURL = $"https://{configured.AccountId}.r2.cloudflarestorage.com",
             ForcePathStyle = true,
-            AuthenticationRegion = "auto"
+            AuthenticationRegion = "auto",
+            Timeout = TimeSpan.FromSeconds(15)
         });
     }
 
@@ -93,7 +96,7 @@ internal sealed class R2InvoiceStorage : IInvoiceStorage, IDisposable
             BucketName = bucketName,
             Key = key,
             Verb = HttpVerb.GET,
-            Expires = DateTime.UtcNow.Add(validFor)
+            Expires = clock.GetUtcNow().UtcDateTime.Add(validFor)
         });
         return new Uri(url);
     }
