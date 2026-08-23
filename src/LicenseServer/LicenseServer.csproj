@@ -25,6 +25,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Embedded so the templates load by assembly resource regardless of the process's
+         working directory or publish layout (test host, container, etc). -->
+    <EmbeddedResource Include="EmailTemplates\*.html" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="LicenseServer.Tests" />
   </ItemGroup>
 
