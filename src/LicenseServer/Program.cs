@@ -315,6 +315,7 @@ builder.Services.AddScoped<UserAdministrationService>();
 builder.Services.AddScoped<ApiCredentialService>();
 builder.Services.AddScoped<DeploymentKeyService>();
 builder.Services.AddScoped<CustomerAccessService>();
+builder.Services.AddScoped<ContactSupportService>();
 builder.Services.AddScoped<IOwnedCredentialRevoker>(services => services.GetRequiredService<ApiCredentialService>());
 builder.Services.AddSingleton<SigningKeyRingService>();
 builder.Services.AddSingleton<ILicenseKeyRing>(sp => sp.GetRequiredService<SigningKeyRingService>());
@@ -631,6 +632,20 @@ app.MapPost("/customer/access/request", async (
     await service.RequestAsync(form["Email"], form["LicenseId"],
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown", ct);
     return Results.Redirect("/customer/access?sent=true");
+}).AllowAnonymous().RequireRateLimiting("device-api");
+
+app.MapPost("/support/contact/send", async (
+    HttpRequest request, ContactSupportService service, CancellationToken ct) =>
+{
+    var form = await request.ReadFormAsync(ct);
+    var reason = form["Reason"].ToString();
+    var licenseId = form["LicenseId"].ToString();
+    var result = await service.SubmitAsync(
+        new ContactSupportSubmission(reason, form["ReplyEmail"], licenseId, form["Message"]), ct);
+    if (!result.Success)
+        return Results.Redirect(
+            $"/support/contact?error={Uri.EscapeDataString(result.Error!)}&reason={Uri.EscapeDataString(reason)}&licenseId={Uri.EscapeDataString(licenseId)}");
+    return Results.Redirect("/support/contact?sent=true");
 }).AllowAnonymous().RequireRateLimiting("device-api");
 
 app.MapGet("/customer/access/consume", async (

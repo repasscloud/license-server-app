@@ -1,0 +1,48 @@
+@page "/support/contact"
+@attribute [AllowAnonymous]
+
+<PageTitle>Contact support</PageTitle>
+
+<main class="auth-card" aria-labelledby="contact-support-heading">
+    <h1 id="contact-support-heading">Contact support</h1>
+    @if (Sent)
+    {
+        <p role="status" class="alert success">Thanks — your message has been sent to our support team.</p>
+    }
+    else
+    {
+        @if (Error is not null)
+        {
+            <p role="alert" class="alert error">@Error</p>
+        }
+        <form method="post" action="/support/contact/send">
+            <AntiforgeryToken />
+            <label>Reason
+                <select name="Reason" required>
+                    <option value="">Select a reason…</option>
+                    @foreach (var (value, label) in ContactSupportReasons.All)
+                    {
+                        <option value="@value" selected="@(value == Reason)">@label</option>
+                    }
+                </select>
+            </label>
+            <label>Reply email address
+                <input name="ReplyEmail" type="email" autocomplete="email" required maxlength="320" />
+            </label>
+            <label>License ID <span>(optional)</span>
+                <input name="LicenseId" autocomplete="off" maxlength="64" value="@LicenseId" />
+            </label>
+            <label>Message
+                <textarea name="Message" required maxlength="4000" rows="6"></textarea>
+            </label>
+            <button class="button" type="submit">Send message</button>
+        </form>
+    }
+</main>
+
+@code {
+    [SupplyParameterFromQuery] private bool Sent { get; set; }
+    [SupplyParameterFromQuery] private string? Reason { get; set; }
+    [SupplyParameterFromQuery] private string? LicenseId { get; set; }
+    [SupplyParameterFromQuery] private string? Error { get; set; }
+}
