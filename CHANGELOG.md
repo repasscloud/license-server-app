@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-24
+
 ### Added
 
 - Public "Contact support" page (`/support/contact`, #72) so customers have
@@ -20,6 +22,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template entry in `EmailTemplates`
   (`src/LicenseServer/TransactionalEmail.cs`) rather than sending inline, so
   it gets the same retry/delivery tracking as other transactional email.
+- Transactional emails now render the real `EmailTemplates/*.html` files
+  (identity confirmation, password recovery, invoice, operator invitation,
+  payment failure, purchase activation, renewal receipt, renewal reminder)
+  instead of building ad hoc plain-text bodies (#76). `EmailTemplateRenderer`
+  gained `{{#if}}` block-conditional support so templates can render
+  optional sections (e.g. an invoice discount line) only when the relevant
+  data is present.
+- PDF invoices are now generated and stored in Cloudflare R2 (#73), and the
+  renewal flow links each invoice to its generated PDF (#74). This spans a
+  new QuestPDF-based invoice renderer, a Stripe invoice data provider, a
+  private R2 storage backend, an `InvoicePdfService` orchestrator that wires
+  it together, and a download endpoint. `RenewalAsync` now generates and
+  links the invoice PDF as part of renewal processing, and the rendered PDF
+  only shows a discount line when a discount was actually applied.
+
+### Fixed
+
+- Operators holding `users.manage` but without MFA enabled (e.g. the seeded
+  default admin) had the "Add identity" form and row actions on
+  `/settings/users` silently disappear with no explanation, reading as a
+  recurrence of #64's stale-claims bug even though claims were fresh (#75).
+  `users.manage` is a high-risk permission whose policy also requires an
+  `amr: mfa` claim, only added at sign-in for accounts with two-factor
+  enabled. The Users page now checks the permission claim separately from
+  the full policy result and shows a banner explaining that MFA is required
+  - and linking to where it can be enabled - instead of hiding the
+  management UI without feedback.
 
 ## [0.3.2] - 2026-08-23
 

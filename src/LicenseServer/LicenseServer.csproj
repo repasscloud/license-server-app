@@ -10,7 +10,7 @@
   <PropertyGroup>
     <!-- Version is overridden by CI (-p:Version=X.Y.Z) at release build/pack time; this is only
          the local/dev fallback so an unversioned build still produces something sane. -->
-    <Version>0.3.2</Version>
+    <Version>0.3.3</Version>
     <PackageId>LicenseServer</PackageId>
     <Authors>RePass Cloud Pty Ltd</Authors>
     <Company>RePass Cloud Pty Ltd</Company>
