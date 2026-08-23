@@ -1,8 +1,10 @@
 <!--
   Template: renewal-receipt (v1)
   Model tokens: {{productName}}, {{editionName}}, {{licenseId}}, {{amount}}, {{periodEnd}}, {{paymentMethodLabel}}, {{actionUrl}}, {{invoicePdfUrl}}
-  {{invoicePdfUrl}} - link to the generated invoice PDF for this renewal (see #TODO PDF invoice generation issue); render
-  the "Download invoice" button only when this token is present, since older/legacy receipts may not have one.
+  {{invoicePdfUrl}} - link to the generated invoice PDF for this renewal. The second button's <td>
+  is wrapped in {{#if invoicePdfUrl}}...{{/if}} (see EmailTemplateRenderer's ApplyConditionalBlocks)
+  so the whole button is omitted, not left as a dead link, when this renewal has no PDF (e.g. PDF
+  generation failed - see BillingPolicies.RenewalAsync).
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -78,9 +80,9 @@
                   <td style="border-radius:6px;background-color:#0f172a;padding-right:10px;">
                     <a href="{{actionUrl}}" style="display:inline-block;padding:12px 24px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;">View receipt</a>
                   </td>
-                  <td style="border-radius:6px;border:1px solid #cbd5e1;">
+                  {{#if invoicePdfUrl}}<td style="border-radius:6px;border:1px solid #cbd5e1;">
                     <a href="{{invoicePdfUrl}}" style="display:inline-block;padding:12px 24px;font-size:14px;font-weight:600;color:#0f172a;text-decoration:none;">Download invoice (PDF)</a>
-                  </td>
+                  </td>{{/if}}
                 </tr>
               </table>
             </td>
