@@ -51,3 +51,53 @@ public sealed class InvoicePdfRendererTests
         TotalDue: "$550.00",
         PaymentMethodLabel: "Visa •••• 4242");
 }
+
+public sealed class InvoiceObjectKeyTests
+{
+    [Fact]
+    public void ForProducesADeterministicKeyFromTheOrderId()
+    {
+        var orderId = Guid.Parse("11111111-2222-3333-4444-555555555555");
+
+        Assert.Equal("invoices/11111111222233334444555555555555.pdf", InvoiceObjectKey.For(orderId));
+    }
+}
+
+public sealed class R2InvoiceStorageTests
+{
+    [Fact]
+    public async Task ExistsAsyncReturnsFalseWhenR2IsNotConfigured()
+    {
+        var storage = new R2InvoiceStorage(Microsoft.Extensions.Options.Options.Create(new R2Options()));
+
+        Assert.False(await storage.ExistsAsync("invoices/missing.pdf"));
+    }
+
+    [Fact]
+    public async Task StoreAsyncThrowsWhenR2IsNotConfigured()
+    {
+        var storage = new R2InvoiceStorage(Microsoft.Extensions.Options.Options.Create(new R2Options()));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => storage.StoreAsync("invoices/x.pdf", [1, 2, 3]));
+    }
+
+    [Fact]
+    public async Task GetPresignedDownloadUrlAsyncComputesASignedUrlWithoutANetworkCall()
+    {
+        var storage = new R2InvoiceStorage(Microsoft.Extensions.Options.Options.Create(new R2Options
+        {
+            AccountId = "test-account",
+            AccessKeyId = "AKIDTEST",
+            SecretAccessKey = "secret-test-key",
+            BucketName = "invoices-test"
+        }));
+
+        var url = await storage.GetPresignedDownloadUrlAsync("invoices/abc.pdf", TimeSpan.FromMinutes(10));
+
+        Assert.StartsWith(
+            "https://test-account.r2.cloudflarestorage.com/invoices-test/invoices/abc.pdf",
+            url.ToString(), StringComparison.Ordinal);
+        Assert.Contains("X-Amz-Signature=", url.ToString(), StringComparison.Ordinal);
+    }
+}
+
