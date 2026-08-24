@@ -284,6 +284,29 @@ public sealed class StripeInvoiceMapping
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+public sealed class InvoiceNumberCounter
+{
+    public DateOnly BusinessDate { get; set; }
+    public int LastValue { get; set; }
+}
+
+public sealed class LicenseOrderInvoice
+{
+    public Guid Id { get; set; }
+    public Guid LicenseOrderId { get; set; }
+    public LicenseOrder LicenseOrder { get; set; } = null!;
+    public required string InvoiceNumber { get; set; }
+    public string? StripePaymentIntentId { get; set; }
+    public string? StripeChargeId { get; set; }
+    public required string Currency { get; set; }
+    public long SubtotalMinor { get; set; }
+    public long DiscountMinor { get; set; }
+    public long TaxMinor { get; set; }
+    public long TotalMinor { get; set; }
+    public string? PaymentMethodLabel { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
 public sealed class Entitlement
 {
     public Guid Id { get; set; }
