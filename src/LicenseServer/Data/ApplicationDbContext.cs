@@ -26,6 +26,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<StripeSubscriptionMapping> StripeSubscriptionMappings => Set<StripeSubscriptionMapping>();
     public DbSet<StripeCheckoutSessionMapping> StripeCheckoutSessionMappings => Set<StripeCheckoutSessionMapping>();
     public DbSet<StripeInvoiceMapping> StripeInvoiceMappings => Set<StripeInvoiceMapping>();
+    public DbSet<InvoiceNumberCounter> InvoiceNumberCounters => Set<InvoiceNumberCounter>();
+    public DbSet<LicenseOrderInvoice> LicenseOrderInvoices => Set<LicenseOrderInvoice>();
     public DbSet<Entitlement> Entitlements => Set<Entitlement>();
     public DbSet<Activation> Activations => Set<Activation>();
     public DbSet<SigningKeyRecord> SigningKeys => Set<SigningKeyRecord>();
@@ -220,6 +222,21 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             .HasForeignKey(item => item.LicenseOrderId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<StripeInvoiceMapping>().HasOne(item => item.BillingContract).WithMany()
             .HasForeignKey(item => item.BillingContractId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<InvoiceNumberCounter>().HasKey(x => x.BusinessDate);
+        builder.Entity<InvoiceNumberCounter>().ToTable(table => table.HasCheckConstraint(
+            "CK_InvoiceNumberCounters_LastValue",
+            "\"LastValue\" BETWEEN 0 AND 16777215"));
+        builder.Entity<LicenseOrderInvoice>().HasIndex(item => item.LicenseOrderId).IsUnique();
+        builder.Entity<LicenseOrderInvoice>().HasIndex(item => item.InvoiceNumber).IsUnique();
+        builder.Entity<LicenseOrderInvoice>().HasIndex(item => item.StripePaymentIntentId);
+        builder.Entity<LicenseOrderInvoice>().HasIndex(item => item.StripeChargeId);
+        builder.Entity<LicenseOrderInvoice>().Property(item => item.InvoiceNumber).HasMaxLength(24);
+        builder.Entity<LicenseOrderInvoice>().Property(item => item.StripePaymentIntentId).HasMaxLength(255);
+        builder.Entity<LicenseOrderInvoice>().Property(item => item.StripeChargeId).HasMaxLength(255);
+        builder.Entity<LicenseOrderInvoice>().Property(item => item.Currency).HasMaxLength(3);
+        builder.Entity<LicenseOrderInvoice>().Property(item => item.PaymentMethodLabel).HasMaxLength(100);
+        builder.Entity<LicenseOrderInvoice>().HasOne(item => item.LicenseOrder).WithOne()
+            .HasForeignKey<LicenseOrderInvoice>(item => item.LicenseOrderId).OnDelete(DeleteBehavior.Restrict);
         // Not (LicenseRecordId) alone: a multi-product imported license legitimately has one
         // Entitlement per product on the same LicenseRecord (see "License import" in
         // docs/superpowers/specs/2026-08-14-key-ring-signing-design.md). The composite still

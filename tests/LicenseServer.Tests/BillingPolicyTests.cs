@@ -615,3 +615,49 @@ public sealed class RenewalReceiptModelTests
         Assert.False(model.ContainsKey("invoicePdfUrl"));
     }
 }
+
+public sealed class PurchaseActivationEmailModelTests
+{
+    [Fact]
+    public void BuildPopulatesAllFieldsIncludingInvoicePdfUrlWhenProvided()
+    {
+        var model = PurchaseActivationEmailModel.Build(
+            "LIC-2026-0824000001", "ABCD-1234", "Acme Widget Pro", "Enterprise", 5,
+            expiresAt: null, publicBaseUrl: "https://license.example.test",
+            invoicePdfUrl: "https://license.example.test/invoices/x/pdf");
+
+        Assert.Equal("LIC-2026-0824000001", model["licenseId"]);
+        Assert.Equal("ABCD-1234", model["activationCode"]);
+        Assert.Equal("Acme Widget Pro", model["productName"]);
+        Assert.Equal("Enterprise", model["editionName"]);
+        Assert.Equal("5", model["seatCount"]);
+        Assert.Equal("Perpetual", model["expiryDate"]);
+        Assert.Equal(
+            "https://license.example.test/support/contact?Reason=machine-wide-activation&LicenseId=LIC-2026-0824000001",
+            model["machineWideUrl"]);
+        Assert.Equal("https://license.example.test/invoices/x/pdf", model["invoicePdfUrl"]);
+    }
+
+    [Fact]
+    public void BuildFormatsANonNullExpiryInsteadOfPerpetual()
+    {
+        var model = PurchaseActivationEmailModel.Build(
+            "LIC-1", "CODE-1", "Product", "Edition", 1,
+            expiresAt: new DateTimeOffset(2027, 3, 15, 0, 0, 0, TimeSpan.Zero),
+            publicBaseUrl: "https://license.example.test", invoicePdfUrl: null);
+
+        Assert.Equal("15 Mar 2027", model["expiryDate"]);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void BuildOmitsInvoicePdfUrlWhenNullOrEmpty(string? invoicePdfUrl)
+    {
+        var model = PurchaseActivationEmailModel.Build(
+            "LIC-1", "CODE-1", "Product", "Edition", 1, expiresAt: null,
+            publicBaseUrl: "https://license.example.test", invoicePdfUrl: invoicePdfUrl);
+
+        Assert.False(model.ContainsKey("invoicePdfUrl"));
+    }
+}
