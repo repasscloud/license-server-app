@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -66,12 +67,45 @@ internal static class RenewalReceiptModel
     }
 }
 
+// Pure and DB/network-free for the same reason as RenewalReceiptModel: the model-shape logic
+// (Perpetual formatting, machine-wide URL construction, omitting invoicePdfUrl when PDF
+// generation failed) is unit-tested directly rather than only through the webhook-processing suite.
+internal static class PurchaseActivationEmailModel
+{
+    public static Dictionary<string, string> Build(
+        string licenseId, string activationCode, string productName, string editionName, int seatCount,
+        DateTimeOffset? expiresAt, string publicBaseUrl, string? invoicePdfUrl)
+    {
+        var model = new Dictionary<string, string>
+        {
+            ["licenseId"] = licenseId,
+            ["activationCode"] = activationCode,
+            ["productName"] = productName,
+            ["editionName"] = editionName,
+            ["seatCount"] = seatCount.ToString(CultureInfo.InvariantCulture),
+            ["expiryDate"] = expiresAt is null
+                ? "Perpetual"
+                : expiresAt.Value.ToString("d MMM yyyy", CultureInfo.InvariantCulture),
+            ["machineWideUrl"] = $"{publicBaseUrl}/support/contact" +
+                $"?Reason={Uri.EscapeDataString(ContactSupportReasons.MachineWideActivation)}" +
+                $"&LicenseId={Uri.EscapeDataString(licenseId)}"
+        };
+        if (!string.IsNullOrEmpty(invoicePdfUrl))
+            model["invoicePdfUrl"] = invoicePdfUrl;
+        return model;
+    }
+}
+
 internal sealed class StripeBillingPolicyProcessor(
     ApplicationDbContext db,
     LicenseStore licenses,
     ITransactionalEmailSender emails,
     IInvoicePdfService invoicePdf,
+    IInvoiceStripeDataProvider invoiceStripeData,
+    IPurchaseInvoiceStripeDataProvider purchaseInvoiceStripeData,
+    InvoiceNumberAllocator invoiceNumbers,
     IOptions<BillingPolicyOptions> options,
+    IOptions<InvoiceIssuerOptions> invoiceIssuer,
     TimeProvider clock,
     IConfiguration configuration,
     IWebHostEnvironment environment,
@@ -290,13 +324,17 @@ internal sealed class StripeBillingPolicyProcessor(
         contract.LicenseRecordId = license.Id;
         order.License = license;
         order.LicenseRecordId = license.Id;
+        // Only one-time (perpetual) purchases generate their own invoice PDF here - subscriptions
+        // get one per renewal via TryGenerateInvoicePdfUrlAsync, where a real Stripe Invoice exists.
+        var invoicePdfUrl = isSubscription
+            ? null
+            : await TryGeneratePurchaseInvoicePdfUrlAsync(
+                order, customer, product, edition, seats, snapshot.CheckoutSessionId, cancellationToken);
         await emails.QueueAsync(new TransactionalEmail(
                 EmailTemplates.PurchaseActivation, customer.Email,
-                new Dictionary<string, string>
-                {
-                    ["licenseId"] = issuedValue.LicenseId,
-                    ["activationCode"] = issuedValue.ActivationCode
-                }),
+                PurchaseActivationEmailModel.Build(
+                    issuedValue.LicenseId, issuedValue.ActivationCode, product.DisplayName, edition,
+                    seats, expiry, ResolvePublicBaseUrl(), invoicePdfUrl)),
             $"billing:purchase:{snapshot.CheckoutSessionId}", cancellationToken);
         db.AuditRecords.Add(Audit(snapshot, "billing.purchase-completed", contract.Id, new
         {
@@ -408,28 +446,116 @@ internal sealed class StripeBillingPolicyProcessor(
         return Completed();
     }
 
+    private string ResolvePublicBaseUrl() =>
+        configuration["CustomerPortal:PublicBaseUrl"]?.TrimEnd('/')
+            ?? (environment.IsDevelopment()
+                ? "http://localhost:8080"
+                : throw new InvalidOperationException("CustomerPortal:PublicBaseUrl is required outside Development."));
+
     private async Task<string?> TryGenerateInvoicePdfUrlAsync(
         LicenseOrder order, BillingContract contract, ProductDefinition product, BillingSnapshot snapshot,
         CancellationToken cancellationToken)
     {
         try
         {
+            var stripeInvoice = await invoiceStripeData.FetchAsync(snapshot.InvoiceId!, cancellationToken)
+                ?? throw new InvalidOperationException(
+                    $"Stripe invoice '{snapshot.InvoiceId}' could not be retrieved for PDF generation.");
+            var issuer = invoiceIssuer.Value;
+            var document = new InvoiceDocumentData(
+                InvoiceId: stripeInvoice.Number,
+                InvoiceDate: stripeInvoice.InvoiceDate,
+                DueDate: stripeInvoice.DueDate,
+                BusinessName: issuer.BusinessName ?? string.Empty,
+                BusinessAddress: issuer.BusinessAddress ?? string.Empty,
+                BusinessAbn: issuer.BusinessAbn ?? string.Empty,
+                BusinessEmail: issuer.BusinessEmail ?? string.Empty,
+                CustomerName: contract.Customer!.Name,
+                CustomerEmail: contract.Customer!.Email,
+                BillingAddress: string.Empty,
+                ProductName: product.DisplayName,
+                EditionName: contract.Edition,
+                SeatCount: contract.Seats,
+                BillingPeriod: stripeInvoice.BillingPeriod,
+                LineItems: stripeInvoice.LineItems,
+                Subtotal: stripeInvoice.Subtotal,
+                DiscountAmount: stripeInvoice.DiscountAmount,
+                TaxLabel: issuer.TaxLabel,
+                TaxAmount: stripeInvoice.TaxAmount,
+                TotalDue: stripeInvoice.Total,
+                PaymentMethodLabel: stripeInvoice.PaymentMethodLabel);
             // Bounded: this runs inside RenewalAsync's advisory-lock transaction, so a slow Stripe/R2
             // call must not stall other billing events indefinitely. A timeout here throws
             // TimeoutException (not OperationCanceledException), so it's still caught below as an
             // ordinary PDF-generation failure rather than escaping past the filter as a cancellation.
             await invoicePdf.GenerateAndStoreAsync(new InvoicePdfRequest(
-                    order.Id, snapshot.InvoiceId!, contract.Customer!.Name, contract.Customer!.Email,
-                    product.DisplayName, contract.Edition, contract.Seats), cancellationToken)
+                    order.Id, document, stripeInvoice.Currency,
+                    stripeInvoice.SubtotalMinor, stripeInvoice.DiscountMinor, stripeInvoice.TaxMinor, stripeInvoice.TotalMinor,
+                    stripeInvoice.PaymentIntentId, stripeInvoice.ChargeId), cancellationToken)
                 .WaitAsync(TimeSpan.FromSeconds(20), cancellationToken);
-            var publicBaseUrl = configuration["CustomerPortal:PublicBaseUrl"]?.TrimEnd('/')
-                ?? (environment.IsDevelopment()
-                    ? "http://localhost:8080"
-                    : throw new InvalidOperationException("CustomerPortal:PublicBaseUrl is required outside Development."));
             // order.Id is the same value InvoicePdfService used to derive the R2 object key
             // (InvoiceObjectKey.For) - the download route and the storage key must both stay
             // derived from this one id, or every emailed link 404s.
-            return $"{publicBaseUrl}/invoices/{order.Id}/pdf";
+            return $"{ResolvePublicBaseUrl()}/invoices/{order.Id}/pdf";
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            LogInvoicePdfGenerationFailed(logger, order.Id, exception);
+            return null;
+        }
+    }
+
+    // Purchases have no Stripe Invoice (invoice_creation isn't enabled on the Payment Link), so
+    // unlike TryGenerateInvoicePdfUrlAsync this sources amounts from the Checkout Session and
+    // generates the business's own invoice number rather than reusing a Stripe one.
+    private async Task<string?> TryGeneratePurchaseInvoicePdfUrlAsync(
+        LicenseOrder order, LicenseServer.Data.Customer customer, ProductDefinition product, string edition, int seats,
+        string checkoutSessionId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var stripeData = await purchaseInvoiceStripeData.FetchAsync(checkoutSessionId, cancellationToken)
+                ?? throw new InvalidOperationException(
+                    $"Stripe checkout session '{checkoutSessionId}' could not be retrieved for PDF generation.");
+            var invoiceNumber = await invoiceNumbers.AllocateAsync(clock.GetUtcNow(), cancellationToken);
+            var issuer = invoiceIssuer.Value;
+            var issuedDate = clock.GetUtcNow().ToString("d MMM yyyy", CultureInfo.InvariantCulture);
+            // Purchases here are single-product, not multi-line-item (see SumDiscountAmount's
+            // comment in InvoiceStripeData.cs) - one synthesized line for the whole order.
+            var lineItem = new InvoiceLineItemDisplay(
+                $"{product.DisplayName} - {edition} ({seats} seat{(seats == 1 ? "" : "s")}, Perpetual)",
+                "1",
+                InvoiceMoneyFormatter.Format(stripeData.SubtotalMinor, stripeData.Currency));
+            var document = new InvoiceDocumentData(
+                InvoiceId: invoiceNumber,
+                InvoiceDate: issuedDate,
+                DueDate: issuedDate,
+                BusinessName: issuer.BusinessName ?? string.Empty,
+                BusinessAddress: issuer.BusinessAddress ?? string.Empty,
+                BusinessAbn: issuer.BusinessAbn ?? string.Empty,
+                BusinessEmail: issuer.BusinessEmail ?? string.Empty,
+                CustomerName: customer.Name,
+                CustomerEmail: customer.Email,
+                BillingAddress: string.Empty,
+                ProductName: product.DisplayName,
+                EditionName: edition,
+                SeatCount: seats,
+                BillingPeriod: "Perpetual",
+                LineItems: [lineItem],
+                Subtotal: InvoiceMoneyFormatter.Format(stripeData.SubtotalMinor, stripeData.Currency),
+                DiscountAmount: stripeData.DiscountMinor > 0
+                    ? $"-{InvoiceMoneyFormatter.Format(stripeData.DiscountMinor, stripeData.Currency)}"
+                    : string.Empty,
+                TaxLabel: issuer.TaxLabel,
+                TaxAmount: InvoiceMoneyFormatter.Format(stripeData.TaxMinor, stripeData.Currency),
+                TotalDue: InvoiceMoneyFormatter.Format(stripeData.TotalMinor, stripeData.Currency),
+                PaymentMethodLabel: stripeData.PaymentMethodLabel);
+            await invoicePdf.GenerateAndStoreAsync(new InvoicePdfRequest(
+                    order.Id, document, stripeData.Currency,
+                    stripeData.SubtotalMinor, stripeData.DiscountMinor, stripeData.TaxMinor, stripeData.TotalMinor,
+                    stripeData.PaymentIntentId, stripeData.ChargeId), cancellationToken)
+                .WaitAsync(TimeSpan.FromSeconds(20), cancellationToken);
+            return $"{ResolvePublicBaseUrl()}/invoices/{order.Id}/pdf";
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

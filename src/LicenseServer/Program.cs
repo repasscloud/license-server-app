@@ -188,8 +188,10 @@ builder.Services.Configure<R2Options>(builder.Configuration.GetSection("R2"));
 builder.Services.Configure<InvoiceIssuerOptions>(builder.Configuration.GetSection("Invoice"));
 builder.Services.AddSingleton<IInvoiceStorage, R2InvoiceStorage>();
 builder.Services.AddScoped<IInvoiceStripeDataProvider, StripeInvoiceDataProvider>();
+builder.Services.AddScoped<IPurchaseInvoiceStripeDataProvider, PurchaseInvoiceStripeDataProvider>();
 builder.Services.AddScoped<IInvoicePdfRenderer, InvoicePdfRenderer>();
 builder.Services.AddScoped<IInvoicePdfService, InvoicePdfService>();
+builder.Services.AddScoped<InvoiceNumberAllocator>();
 builder.Services.AddOptions<BillingWorkerOptions>()
     .BindConfiguration("Billing")
     .Validate(options => options.BatchSize is >= 1 and <= 100, "Billing:BatchSize must be between 1 and 100.")

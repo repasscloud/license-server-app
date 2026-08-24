@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-08-25
+
+### Added
+
+- One-time (perpetual) purchases now generate their own invoice PDF and
+  upload it to R2, linked back to the order (#84). Purchases don't have a
+  Stripe Invoice object (no `invoice_creation` on the Payment Link), so a
+  new `PurchaseInvoiceStripeDataProvider`
+  (`src/LicenseServer/PurchaseInvoiceStripeData.cs`) sources amounts,
+  currency, and payment method from the Stripe Checkout Session instead,
+  and a new per-business-date `InvoiceNumberAllocator`
+  (`src/LicenseServer/InvoiceNumberAllocation.cs`, mirroring
+  `LicenseIdAllocator`) generates the business's own invoice number.
+  `InvoicePdfService` is generalized so both the renewal and purchase paths
+  build their own `InvoiceDocumentData` and hand it to a shared
+  render/store/persist call, reusing the existing
+  `/invoices/{orderId}/pdf` presigned-redirect endpoint rather than a new
+  public URL.
+- New `LicenseOrderInvoice` table records the Stripe PaymentIntent ID and
+  Charge ID against every order (purchase or renewal), so a refund can be
+  looked up against the right payment later without digging through Stripe
+  by hand (#84).
+
+### Fixed
+
+- The purchase-confirmation email rendered Edition, Seats, and Expiry blank,
+  and the "Request machine-wide code" button had an empty `href` (stripped
+  of its styling by mail clients) because `BillingPolicies.cs` only ever
+  populated `licenseId`/`activationCode` in the email model, even though the
+  template expected several more fields (#83). The full model is now built
+  from data already resolved during purchase processing; `expiryDate` reads
+  `"Perpetual"` for non-expiring licenses, and `machineWideUrl` links to the
+  existing `/support/contact` page, prefilled via its `Reason`/`LicenseId`
+  query parameters.
+
 ## [0.3.3] - 2026-08-24
 
 ### Added

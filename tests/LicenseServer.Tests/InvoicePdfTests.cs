@@ -1,3 +1,6 @@
+using LicenseServer.Data;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using QuestPDF.Infrastructure;
 
 namespace LicenseServer.Tests;
@@ -167,69 +170,86 @@ public sealed class StripeInvoiceDataProviderTests
     }
 }
 
-public sealed class InvoicePdfServiceTests
+// InvoicePdfService no longer fetches Stripe data itself (callers build InvoiceDocumentData from
+// whichever Stripe object actually has it - a real Invoice for renewals, a Checkout Session for
+// purchases); it renders, stores to R2, and persists the LicenseOrderInvoice row, so these tests
+// need a real ApplicationDbContext rather than a fake, hence the Postgres fixture.
+[Collection(PostgresTestSuite.Name)]
+public sealed class InvoicePdfServiceTests(PostgresWebFixture fixture)
 {
     [Fact]
-    public async Task GenerateAndStoreAsyncBuildsDocumentFromStripeDataAndStoresRenderedBytes()
+    public async Task GenerateAndStoreAsyncStoresRenderedBytesAndPersistsTheLicenseOrderInvoiceRow()
     {
-        var stripeData = new FakeInvoiceStripeDataProvider(new StripeInvoiceData(
-            Number: "INV-2002",
-            InvoiceDate: "1 Jan 2026",
-            DueDate: "15 Jan 2026",
-            BillingPeriod: "1 Jan 2026 - 1 Jan 2027",
-            Subtotal: "$500.00",
-            DiscountAmount: "-$25.00",
-            TaxAmount: "$50.00",
-            Total: "$525.00",
-            PaymentMethodLabel: "Visa •••• 4242",
-            LineItems: [new InvoiceLineItemDisplay("Enterprise seats", "25", "$500.00")]));
+        await using var scope = fixture.Factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         var renderer = new FakeInvoicePdfRenderer([1, 2, 3]);
         var storage = new FakeInvoiceStorage();
-        var service = new InvoicePdfService(stripeData, renderer, storage,
-            Microsoft.Extensions.Options.Options.Create(new InvoiceIssuerOptions
-            {
-                BusinessName = "RePass Cloud Pty Ltd",
-                BusinessAddress = "1 Example St",
-                BusinessAbn = "12 345 678 901",
-                BusinessEmail = "billing@repasscloud.com",
-                TaxLabel = "GST"
-            }));
-        var orderId = Guid.NewGuid();
+        var service = new InvoicePdfService(renderer, storage, db, TimeProvider.System);
+        var orderId = await SeedOrderAsync(db);
+        // A random-per-run invoice number, not a fixed literal: this test's Postgres fixture is a
+        // long-lived database shared across test runs, and the row it inserts here is never
+        // cleaned up, so a fixed literal collides with the unique index on a second run.
+        var invoiceNumber = $"INV-TEST-{Guid.NewGuid():N}"[..24];
+        var document = InvoicePdfRendererTests.SampleData() with { InvoiceId = invoiceNumber };
 
         var key = await service.GenerateAndStoreAsync(new InvoicePdfRequest(
-            orderId, "in_test_1", "Jane Buyer", "jane@example.test", "Acme Widget Pro", "Enterprise", 25));
+            orderId, document, "AUD", 50000, 2500, 5000, 52500, "pi_test_1", "ch_test_1"));
 
         Assert.Equal(InvoiceObjectKey.For(orderId), key);
         Assert.Equal(key, storage.StoredKey);
         Assert.Equal(new byte[] { 1, 2, 3 }, storage.StoredContent);
-        Assert.NotNull(renderer.CapturedData);
-        Assert.Equal("Acme Widget Pro", renderer.CapturedData!.ProductName);
-        Assert.Equal("$525.00", renderer.CapturedData.TotalDue);
-        Assert.Equal("-$25.00", renderer.CapturedData.DiscountAmount);
-        Assert.Equal("GST", renderer.CapturedData.TaxLabel);
-        Assert.Equal("Jane Buyer", renderer.CapturedData.CustomerName);
-        Assert.Equal("1 Jan 2026", renderer.CapturedData.InvoiceDate);
-        Assert.Equal("15 Jan 2026", renderer.CapturedData.DueDate);
-        Assert.Single(renderer.CapturedData.LineItems);
+        Assert.Same(document, renderer.CapturedData);
+
+        db.ChangeTracker.Clear();
+        var row = await db.LicenseOrderInvoices.AsNoTracking().SingleAsync(item => item.LicenseOrderId == orderId);
+        Assert.Equal(invoiceNumber, row.InvoiceNumber);
+        Assert.Equal("pi_test_1", row.StripePaymentIntentId);
+        Assert.Equal("ch_test_1", row.StripeChargeId);
+        Assert.Equal("AUD", row.Currency);
+        Assert.Equal(50000, row.SubtotalMinor);
+        Assert.Equal(2500, row.DiscountMinor);
+        Assert.Equal(5000, row.TaxMinor);
+        Assert.Equal(52500, row.TotalMinor);
+        Assert.Equal(document.PaymentMethodLabel, row.PaymentMethodLabel);
     }
 
-    [Fact]
-    public async Task GenerateAndStoreAsyncThrowsWhenStripeDataIsUnavailable()
+    private static async Task<Guid> SeedOrderAsync(ApplicationDbContext db)
     {
-        var service = new InvoicePdfService(
-            new FakeInvoiceStripeDataProvider(null),
-            new FakeInvoicePdfRenderer([1]),
-            new FakeInvoiceStorage(),
-            Microsoft.Extensions.Options.Options.Create(new InvoiceIssuerOptions()));
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.GenerateAndStoreAsync(
-            new InvoicePdfRequest(Guid.NewGuid(), "in_missing", "Jane Buyer", "jane@example.test", "Product", "Edition", 1)));
-    }
-
-    private sealed class FakeInvoiceStripeDataProvider(StripeInvoiceData? data) : IInvoiceStripeDataProvider
-    {
-        public Task<StripeInvoiceData?> FetchAsync(string stripeInvoiceId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(data);
+        var marker = Guid.NewGuid().ToString("N");
+        var customer = new Customer
+        {
+            Id = Guid.NewGuid(),
+            Name = "Jane Buyer",
+            Email = $"invoice-svc-{marker}@example.test",
+            NormalizedEmail = $"invoice-svc-{marker}@example.test",
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        var product = new ProductDefinition
+        {
+            Id = Guid.NewGuid(),
+            Code = $"invoice-svc-{marker}",
+            DisplayName = "Acme Widget Pro",
+            IsActive = true,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        var order = new LicenseOrder
+        {
+            Id = Guid.NewGuid(),
+            Customer = customer,
+            CustomerId = customer.Id,
+            ProductDefinition = product,
+            ProductDefinitionId = product.Id,
+            Kind = "purchase",
+            Status = "paid",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        db.Customers.Add(customer);
+        db.ProductDefinitions.Add(product);
+        db.LicenseOrders.Add(order);
+        await db.SaveChangesAsync();
+        return order.Id;
     }
 
     private sealed class FakeInvoicePdfRenderer(byte[] bytes) : IInvoicePdfRenderer

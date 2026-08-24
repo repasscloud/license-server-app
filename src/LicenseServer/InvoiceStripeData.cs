@@ -14,7 +14,14 @@ internal sealed record StripeInvoiceData(
     string TaxAmount,
     string Total,
     string PaymentMethodLabel,
-    IReadOnlyList<InvoiceLineItemDisplay> LineItems);
+    IReadOnlyList<InvoiceLineItemDisplay> LineItems,
+    string? PaymentIntentId,
+    string? ChargeId,
+    string Currency,
+    long SubtotalMinor,
+    long DiscountMinor,
+    long TaxMinor,
+    long TotalMinor);
 
 // Single business scenario: minor-unit currencies only (cents-based), which covers every
 // currency this business actually bills in. Zero-decimal currencies (e.g. JPY) are out of scope.
@@ -63,6 +70,7 @@ internal sealed class StripeInvoiceDataProvider : IInvoiceStripeDataProvider
             cancellationToken: cancellationToken);
         var currency = invoice.Currency;
         var card = ResolvePaymentMethodCard(invoice);
+        var payment = ResolvePayment(invoice);
         var lineItems = invoice.Lines.Data
             .Select(line => new InvoiceLineItemDisplay(
                 line.Description ?? string.Empty,
@@ -81,17 +89,29 @@ internal sealed class StripeInvoiceDataProvider : IInvoiceStripeDataProvider
             PaymentMethodLabel: card is not null
                 ? $"{CapitalizeBrand(card.Brand)} •••• {card.Last4}"
                 : "Payment on file",
-            LineItems: lineItems);
+            LineItems: lineItems,
+            PaymentIntentId: payment?.PaymentIntentId,
+            ChargeId: payment?.ChargeId,
+            Currency: currency,
+            SubtotalMinor: invoice.Subtotal,
+            DiscountMinor: SumDiscountAmount(invoice.TotalDiscountAmounts),
+            TaxMinor: SumTaxAmount(invoice.TotalTaxes),
+            TotalMinor: invoice.Total);
     }
 
     // A paid invoice's actual charged card usually lives on its Payments collection, not
     // DefaultPaymentMethod (which is only set when explicitly overridden on the invoice - renewals
     // normally leave it null and inherit from the subscription/customer instead).
     private static PaymentMethodCard? ResolvePaymentMethodCard(Invoice invoice) =>
-        invoice.Payments?.Data?
-            .Select(payment => payment.Payment?.PaymentIntent?.PaymentMethod?.Card)
-            .FirstOrDefault(card => card is not null)
+        ResolvePayment(invoice)?.PaymentIntent?.PaymentMethod?.Card
         ?? invoice.DefaultPaymentMethod?.Card;
+
+    // Same payments-collection preference as the card lookup above: the PaymentIntent/Charge
+    // that actually settled this invoice, for refund lookup, not just whatever is on file.
+    private static InvoicePaymentPayment? ResolvePayment(Invoice invoice) =>
+        invoice.Payments?.Data?
+            .Select(payment => payment.Payment)
+            .FirstOrDefault(payment => payment is not null);
 
     // Extracted so the summation logic is unit-testable without a live Stripe call: Total - Subtotal
     // is wrong whenever a discount/coupon is applied (can go negative), so the real per-tax-rate
