@@ -527,6 +527,39 @@ internal sealed class LicenseStore(
         return StoreResult<ActiveActivation>.Ok(ToActive(activation, authorized.Value.LicenseId));
     }
 
+    // Releases the seat for whatever activation currently holds normalizedDeviceId on the given
+    // license, without requiring the activationToken issued at enrollment time. Intended for a
+    // credential holder (deployment key, or license-id + activation-code) who still controls the
+    // device but lost the local activationToken - the normal AuthorizeAsync/DeactivateAsync path
+    // needs that token and has no recovery route. Deliberately scoped to "this exact device, this
+    // exact license" rather than an arbitrary deviceId, so it cannot be used to grief a seat the
+    // caller does not hold.
+    internal async Task<StoreResult<ActiveActivation>> ForceDeactivateByDeviceAsync(
+        Guid licenseRecordId,
+        string normalizedDeviceId,
+        DateTimeOffset now,
+        string actor,
+        CancellationToken cancellationToken = default)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+        var activation = await db.Activations.Include(x => x.License)
+            .SingleOrDefaultAsync(x => x.License.Id == licenseRecordId
+                && x.DeviceIdHash == normalizedDeviceId && x.DeactivatedAt == null, cancellationToken);
+        if (activation is null)
+            return StoreResult<ActiveActivation>.NotFound("No active activation was found for this device.");
+
+        activation.DeactivatedAt = now;
+        AddAudit(actor, "activation.force-deactivated", "activation", activation.ActivationId, "success", new
+        {
+            licenseId = activation.License.LicenseId,
+            deviceSuffix = activation.DeviceIdSuffix,
+            priorActivationId = activation.ActivationId
+        }, now);
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return StoreResult<ActiveActivation>.Ok(ToActive(activation, activation.License.LicenseId));
+    }
+
     public async Task<StoreResult<bool>> RevokeAsync(
         string licenseId,
         string? reason,

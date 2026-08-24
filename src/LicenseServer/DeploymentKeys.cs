@@ -287,6 +287,82 @@ internal sealed class DeploymentKeyService(
         }
     }
 
+    // Lets a deployment-key holder release the seat held by their own machine when the local
+    // activationToken was lost (e.g. a build shipped with a mismatched key pair, so enrollment
+    // succeeded server-side but the client never persisted the token - see issue #88). deviceId is
+    // recomputed on the caller's machine with the same os-machine-id-sha256-v1 scheme used at
+    // enrollment, so this can only release the seat for the device actually making the call - it
+    // does not let a key holder force-release an arbitrary deviceId they merely observed elsewhere.
+    public async Task<StoreResult<LicenseStore.ActiveActivation>> ForceDeactivateAsync(
+        ForceDeactivateDeploymentKeyRequest request,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        var validation = ValidateForceDeactivateRequest(request);
+        if (validation is not null)
+            return StoreResult<LicenseStore.ActiveActivation>.BadRequest(validation);
+        const string rejectedAction = "deployment-key.force-deactivation-rejected";
+        if (!DeploymentKeyFormat.TryParse(request.DeploymentKey, out var publicId, out var secret))
+        {
+            AddRejectionAudit(null, "unparseable", "malformed-credential", now, rejectedAction);
+            await db.SaveChangesAsync(cancellationToken);
+            return StoreResult<LicenseStore.ActiveActivation>.Unauthorized("Deployment key is invalid.");
+        }
+
+        var key = await db.DeploymentKeys.SingleOrDefaultAsync(x => x.PublicId == publicId, cancellationToken);
+        if (key is null || key.SecretHashVersion != DeploymentKeyHasher.CurrentVersion
+            || !hasher.Verify(publicId, secret, key.SecretHash))
+        {
+            AddRejectionAudit(null, publicId, "invalid-credential", now, rejectedAction);
+            await db.SaveChangesAsync(cancellationToken);
+            return StoreResult<LicenseStore.ActiveActivation>.Unauthorized("Deployment key is invalid.");
+        }
+        if (key.RevokedAt is not null)
+        {
+            AddRejectionAudit(key, publicId, "revoked", now, rejectedAction);
+            await db.SaveChangesAsync(cancellationToken);
+            return StoreResult<LicenseStore.ActiveActivation>.Unauthorized("Deployment key has been revoked.");
+        }
+        if (key.ExpiresAt is not null && key.ExpiresAt <= now)
+        {
+            AddRejectionAudit(key, publicId, "expired", now, rejectedAction);
+            await db.SaveChangesAsync(cancellationToken);
+            return StoreResult<LicenseStore.ActiveActivation>.Unauthorized("Deployment key has expired.");
+        }
+
+        var normalizedDeviceId = request.Device!.DeviceId!.ToUpperInvariant();
+        var result = await licenseStore.ForceDeactivateByDeviceAsync(
+            key.LicenseRecordId, normalizedDeviceId, now, $"deployment-key:{key.PublicId}", cancellationToken);
+
+        if (result.Success)
+        {
+            key.LastUsedAt = now;
+            AddAudit($"deployment-key:{key.PublicId}", "deployment-key.force-deactivation-succeeded", key, new
+            {
+                activationId = result.Value!.ActivationId,
+                deviceSuffix = result.Value.DeviceIdSuffix
+            });
+        }
+        else
+        {
+            AddRejectionAudit(key, publicId, result.Error ?? "rejected", now, rejectedAction);
+        }
+        await db.SaveChangesAsync(cancellationToken);
+        return result;
+    }
+
+    private static string? ValidateForceDeactivateRequest(ForceDeactivateDeploymentKeyRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.DeploymentKey))
+            return "A deployment key is required.";
+        if (request.Device is null
+            || !string.Equals(request.Device.Scheme, DeviceIdentity.Scheme, StringComparison.Ordinal)
+            || request.Device.DeviceId is null
+            || !DeviceIdentity.IsValidDeviceId(request.Device.DeviceId))
+            return $"Device must use {DeviceIdentity.Scheme} with a 64-character SHA-256 identifier.";
+        return null;
+    }
+
     private void AddAudit(string actor, string action, DeploymentKey key, object context) =>
         db.AuditRecords.Add(new AuditRecord
         {
@@ -305,11 +381,13 @@ internal sealed class DeploymentKeyService(
             TimestampUtc = clock.GetUtcNow()
         });
 
-    private void AddRejectionAudit(DeploymentKey? key, string publicId, string reason, DateTimeOffset now) =>
+    private void AddRejectionAudit(
+        DeploymentKey? key, string publicId, string reason, DateTimeOffset now,
+        string action = "deployment-key.enrollment-rejected") =>
         db.AuditRecords.Add(new AuditRecord
         {
             Actor = "anonymous",
-            Action = "deployment-key.enrollment-rejected",
+            Action = action,
             TargetType = "deployment-key",
             TargetId = key?.PublicId ?? publicId,
             Result = "rejected",

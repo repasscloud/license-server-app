@@ -124,6 +124,51 @@ you just persisted:
 Calling `refresh` on an activation that was enrolled with `mode: "offline"` returns a conflict —
 this is expected behavior, not a bug.
 
+## Recovering a seat when the local `activationToken` is lost
+
+The normal deactivate flow above requires the `activationToken` you persisted at enrollment. If
+that persistence step failed — for example a build shipped with a mismatched deployment-key pair,
+so enrollment succeeded server-side but the client crashed before writing the token to disk — you
+have no local credential to deactivate with, and a retried enrollment fails with a `409 Conflict`
+("License is already active on device ..."). Use force-deactivate instead:
+
+`POST {baseUrl}/api/v1/deployment-keys/force-deactivate`
+
+```json
+{
+  "deploymentKey": "dpk_live_...",
+  "device": {
+    "scheme": "os-machine-id-sha256-v1",
+    "deviceId": "<recomputed on this machine, same as enrollment>"
+  }
+}
+```
+
+This is authenticated by the deployment key (anonymous endpoint, same trust model as `enroll`) and
+the caller's own recomputed `deviceId` — **not** by `activationId`/`activationToken`, since those
+are exactly what's missing. It releases whichever activation currently holds that `deviceId` under
+the deployment key's parent license. Because `deviceId` is deterministically derived from the
+machine (see the device-identity scheme above), this can only be invoked *from* the device being
+released — it does not let a key holder force-release an arbitrary `deviceId` they merely observed
+elsewhere (e.g. in the license admin UI's activation history). Releasing a seat you don't hold the
+device for still requires an administrator using the internal
+`POST /api/v1/admin/activations/{activationId}/deactivate` route.
+
+Response shape mirrors the normal deactivate response:
+
+```json
+{ "licenseId": "LIC-...", "activationId": "act_...", "status": "deactivated", "deactivatedAt": "..." }
+```
+
+Rate-limited identically to `enroll` (IP dimension + deployment-key-prefix dimension — see
+"Rate limiting" above). Every call, successful or rejected, writes an immutable audit record, so
+this is not an unaudited way to grief someone else's seat. Once the seat is released, retry
+`enroll` normally to re-activate this machine and get a fresh `activationToken` to persist.
+
+Use the normal `activations/{activationId}/deactivate` flow whenever you still hold the
+`activationToken` — force-deactivate exists specifically for the "local credentials are gone"
+recovery case.
+
 ## Error responses
 
 All non-2xx responses are [RFC 9457 Problem Details](https://www.rfc-editor.org/rfc/rfc9457)

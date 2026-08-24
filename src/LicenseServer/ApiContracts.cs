@@ -112,3 +112,13 @@ public sealed record EnrollDeploymentKeyRequest(
     string? ActivationToken,
     string? Mode,
     DeviceRequest? Device);
+
+public sealed record ForceDeactivateDeploymentKeyRequest(
+    string? DeploymentKey,
+    DeviceRequest? Device);
+
+public sealed record ForceDeactivationResponse(
+    string LicenseId,
+    string ActivationId,
+    string Status,
+    DateTimeOffset DeactivatedAt);

@@ -474,7 +474,8 @@ app.Use(async (context, next) =>
 app.UseAuthentication();
 app.UseWhen(
     context => HttpMethods.IsPost(context.Request.Method)
-        && context.Request.Path.Equals("/api/v1/deployment-keys/enroll", StringComparison.OrdinalIgnoreCase),
+        && (context.Request.Path.Equals("/api/v1/deployment-keys/enroll", StringComparison.OrdinalIgnoreCase)
+            || context.Request.Path.Equals("/api/v1/deployment-keys/force-deactivate", StringComparison.OrdinalIgnoreCase)),
     branch => branch.Use(async (context, next) =>
     {
         // Coarse per-IP dimension, checked first and before any body reading: bounds every caller
@@ -759,6 +760,17 @@ app.MapPost("/api/v1/deployment-keys/enroll", async (
         : Problem(result);
 }).AllowAnonymous().RequireRateLimiting("deployment-key-enroll")
   .WithDescription("Enrolls one machine under the deployment key's parent license, sharing that license's existing seat pool and activation records with the manual activation-code flow. The deployment key grants only machine enrollment - no admin, customer, billing, or activation-listing access.");
+
+app.MapPost("/api/v1/deployment-keys/force-deactivate", async (
+    ForceDeactivateDeploymentKeyRequest request, DeploymentKeyService service, CancellationToken cancellationToken) =>
+{
+    var now = DateTimeOffset.UtcNow;
+    var result = await service.ForceDeactivateAsync(request, now, cancellationToken);
+    return result.Success
+        ? Results.Ok(new ForceDeactivationResponse(result.Value!.LicenseId, result.Value.ActivationId, "deactivated", now))
+        : Problem(result);
+}).AllowAnonymous().RequireRateLimiting("deployment-key-enroll")
+  .WithDescription("Releases the seat held by the caller's own machine on the deployment key's parent license, authenticated by the deployment key and a recomputed deviceId instead of the activationToken issued at enrollment. Use only when the local activationToken was lost (e.g. a corrupted enrollment) - if you still hold the activationToken, use POST /api/v1/activations/{activationId}/deactivate instead.");
 
 var adminApi = app.MapGroup("/api/v1/admin").RequireAuthorization().RequireRateLimiting("admin-api").DisableAntiforgery();
 adminApi.MapGet("/authorization/{permission}", async (

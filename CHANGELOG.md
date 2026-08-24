@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-08-25
+
+### Added
+
+- New anonymous `POST /api/v1/deployment-keys/force-deactivate` endpoint lets a deployment-key
+  holder release the seat held by their own machine without the `activationToken` issued at
+  enrollment (#88). Authenticated by the deployment key itself and a recomputed `deviceId`
+  (same `os-machine-id-sha256-v1` scheme used at enrollment), scoped to that key's parent
+  license, and rate-limited by IP and deployment-key prefix the same way
+  `deployment-keys/enroll` is. Every call (success or rejection) writes an immutable
+  `AuditRecord` (`deployment-key.force-deactivation-succeeded` /
+  `deployment-key.force-deactivation-rejected`, plus `activation.force-deactivated` on the
+  released activation), so a machine that lost its local credentials (e.g. because it enrolled
+  with a build shipping a mismatched primary/secondary key pair, so enrollment succeeded
+  server-side but the client never persisted the token) can recover the seat itself instead of
+  needing a manual admin `activations/{activationId}/deactivate` call. New
+  `LicenseStore.ForceDeactivateByDeviceAsync` and `DeploymentKeyService.ForceDeactivateAsync`.
+
 ## [0.3.4] - 2026-08-25
 
 ### Added
