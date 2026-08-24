@@ -167,12 +167,19 @@ jobs:
         with:
           global-json-file: global.json
 
-      # Native AOT builds (including the native linux-x64 target below) need clang; the
-      # aarch64 binutils give ilcompiler the cross-linker/objcopy it needs for linux-arm64.
+      # Native AOT builds (including the native linux-x64 target below) need clang. For
+      # linux-arm64 it also needs an actual aarch64 sysroot (libc/crt objects/libgcc) to
+      # link against - binutils-aarch64-linux-gnu alone only provides the cross-linker,
+      # not the target libraries, which is why cross-linking used to fail with "cannot
+      # find Scrt1.o" / "-lc" / etc. gcc-aarch64-linux-gnu pulls in libc6-dev-arm64-cross,
+      # which is the sysroot ilcompiler's linker step needs.
       - name: Install ARM64 cross-compilation toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm binutils-aarch64-linux-gnu
+          sudo apt-get install -y clang llvm gcc-aarch64-linux-gnu
+
+      - name: Set ARM64 sysroot for Native AOT
+        run: echo "SYSROOT_AARCH64=/usr/aarch64-linux-gnu" >> "$GITHUB_ENV"
 
       # Licensing.Core is what third-party products reference to verify licence files offline
       # (see README "Calling validation directly from an application"). Released alongside the
@@ -222,10 +229,16 @@ jobs:
               STAGE_DIR="artifacts/publish/$STAGE_NAME"
               mkdir -p "$STAGE_DIR"
 
+              EXTRA_ARGS=()
+              if [ "$RID" = "linux-arm64" ]; then
+                EXTRA_ARGS+=(-p:SysRoot="$SYSROOT_AARCH64")
+              fi
+
               dotnet publish "$CSPROJ" \
                 -c Release \
                 -r "$RID" \
                 -p:PublishAot=true \
+                "${EXTRA_ARGS[@]}" \
                 -o "$STAGE_DIR"
 
               cp README.md CHANGELOG.md LICENSE "$STAGE_DIR"/
