@@ -531,17 +531,26 @@ internal sealed class LicenseStore(
     // license, without requiring the activationToken issued at enrollment time. Intended for a
     // credential holder (deployment key, or license-id + activation-code) who still controls the
     // device but lost the local activationToken - the normal AuthorizeAsync/DeactivateAsync path
-    // needs that token and has no recovery route. Deliberately scoped to "this exact device, this
-    // exact license" rather than an arbitrary deviceId, so it cannot be used to grief a seat the
-    // caller does not hold.
-    internal async Task<StoreResult<ActiveActivation>> ForceDeactivateByDeviceAsync(
+    // needs that token and has no recovery route. Scoped to "this exact license" and a
+    // caller-supplied deviceId, matching how ActivateWithinLockAsync treats deviceId - a
+    // deterministic, self-reported identifier, not a cryptographic proof of possession. Anyone who
+    // holds the deployment key AND learns another activation's deviceId (e.g. from that machine's
+    // own signed license file, or a cloned VM image) can release that activation's seat with this
+    // call, exactly as they could already claim it via enroll; see the rate limiting and audit
+    // trail applied by callers (DeploymentKeyService.ForceDeactivateAsync) for how that risk is
+    // bounded rather than eliminated.
+    //
+    // No transaction/commit here, matching ActivateWithinLockAsync's contract: the caller owns the
+    // transaction and commits once, after also recording its own credential-level audit, so the
+    // activation change and every audit record for one force-deactivate call land in a single
+    // atomic commit instead of two.
+    internal async Task<StoreResult<ActiveActivation>> ForceDeactivateWithinLockAsync(
         Guid licenseRecordId,
         string normalizedDeviceId,
         DateTimeOffset now,
         string actor,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         var activation = await db.Activations.Include(x => x.License)
             .SingleOrDefaultAsync(x => x.License.Id == licenseRecordId
                 && x.DeviceIdHash == normalizedDeviceId && x.DeactivatedAt == null, cancellationToken);
@@ -555,8 +564,6 @@ internal sealed class LicenseStore(
             deviceSuffix = activation.DeviceIdSuffix,
             priorActivationId = activation.ActivationId
         }, now);
-        await db.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
         return StoreResult<ActiveActivation>.Ok(ToActive(activation, activation.License.LicenseId));
     }
 

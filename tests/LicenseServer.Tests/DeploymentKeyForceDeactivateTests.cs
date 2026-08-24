@@ -133,6 +133,26 @@ public sealed class DeploymentKeyForceDeactivateTests(PostgresWebFixture fixture
         Assert.True(await db.AuditRecords.AnyAsync(x => x.Action == "activation.force-deactivated"));
     }
 
+    [Fact]
+    [Trait("ExpectedGreenStage", "11")]
+    public async Task ForceDeactivateWritesAnAuditRecordEvenWhenValidationFails()
+    {
+        // A malformed request (missing device) must still be recorded, not just rejections that
+        // get as far as verifying the deployment key - the whole point of the audit trail is to
+        // surface every attempt, including ones that never reach credential verification.
+        using var client = fixture.Factory.CreateClient();
+        var response = await client.PostAsJsonAsync("/api/v1/deployment-keys/force-deactivate", new
+        {
+            deploymentKey = "dpk_live_0000000000000000_" + new string('A', 43)
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        await using var scope = fixture.Factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.True(await db.AuditRecords.AnyAsync(x =>
+            x.Action == "deployment-key.force-deactivation-rejected" && x.Result == "rejected"));
+    }
+
     private async Task<string> ActivationIdFor(string deviceId)
     {
         await using var scope = fixture.Factory.Services.CreateAsyncScope();

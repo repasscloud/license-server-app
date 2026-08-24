@@ -387,6 +387,24 @@ builder.Services.AddRateLimiter(options =>
             AutoReplenishment = true
         });
     });
+    // Deliberately much stricter than "deployment-key-enroll" above: force-deactivate lets a key
+    // holder interrupt an already-running machine rather than merely contest a free seat (see the
+    // trust-model comment on DeploymentKeyService.ForceDeactivateAsync), so a caller who has
+    // observed/guessed another device's deviceId is bounded to a slow, easily-noticed trickle
+    // rather than the same burst budget enrollment gets.
+    options.AddPolicy("deployment-key-force-deactivate", context =>
+    {
+        var partitionKey = context.Items.TryGetValue("deployment-key-partition", out var value) && value is string key
+            ? key
+            : context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = builder.Configuration.GetValue("RateLimits:DeploymentKeyForceDeactivatePermitLimit", 5),
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true
+        });
+    });
 });
 
 // Coarse per-IP dimension for deployment-key enrollment, enforced independently of the
@@ -403,6 +421,19 @@ var deploymentKeyEnrollIpLimiter = PartitionedRateLimiter.Create<HttpContext, st
             AutoReplenishment = true
         }));
 
+// Same coarse per-IP dimension as above, but for force-deactivate's own (much lower) budget - see
+// the comment on the "deployment-key-force-deactivate" policy.
+var deploymentKeyForceDeactivateIpLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+    RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = builder.Configuration.GetValue("RateLimits:DeploymentKeyForceDeactivateIpPermitLimit", 10),
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true
+        }));
+
 var dataProtection = builder.Services.AddDataProtection().SetApplicationName("LicenseServer");
 var dataProtectionPath = builder.Configuration["DataProtection:KeysPath"];
 if (!string.IsNullOrWhiteSpace(dataProtectionPath))
@@ -413,6 +444,7 @@ if (!string.IsNullOrWhiteSpace(dataProtectionPath))
 
 var app = builder.Build();
 app.Lifetime.ApplicationStopping.Register(deploymentKeyEnrollIpLimiter.Dispose);
+app.Lifetime.ApplicationStopping.Register(deploymentKeyForceDeactivateIpLimiter.Dispose);
 if (ephemeralDevelopmentPepper)
 {
     var logEphemeralPepper = LoggerMessage.Define(
@@ -483,8 +515,12 @@ app.UseWhen(
         // ID per request cannot evade it the way it would evade the credential-only named policy
         // below. Cheap and synchronous (QueueLimit 0 everywhere in this app, so AttemptAcquire never
         // waits) - rejecting here also means an IP that has exhausted this limit never reaches the
-        // body-buffering step further down.
-        using (var ipLease = deploymentKeyEnrollIpLimiter.AttemptAcquire(context))
+        // body-buffering step further down. force-deactivate uses its own, much lower-budget IP
+        // limiter (see the comment on the "deployment-key-force-deactivate" policy).
+        var ipLimiter = context.Request.Path.Equals("/api/v1/deployment-keys/force-deactivate", StringComparison.OrdinalIgnoreCase)
+            ? deploymentKeyForceDeactivateIpLimiter
+            : deploymentKeyEnrollIpLimiter;
+        using (var ipLease = ipLimiter.AttemptAcquire(context))
         {
             if (!ipLease.IsAcquired)
             {
@@ -769,8 +805,8 @@ app.MapPost("/api/v1/deployment-keys/force-deactivate", async (
     return result.Success
         ? Results.Ok(new ForceDeactivationResponse(result.Value!.LicenseId, result.Value.ActivationId, "deactivated", now))
         : Problem(result);
-}).AllowAnonymous().RequireRateLimiting("deployment-key-enroll")
-  .WithDescription("Releases the seat held by the caller's own machine on the deployment key's parent license, authenticated by the deployment key and a recomputed deviceId instead of the activationToken issued at enrollment. Use only when the local activationToken was lost (e.g. a corrupted enrollment) - if you still hold the activationToken, use POST /api/v1/activations/{activationId}/deactivate instead.");
+}).AllowAnonymous().RequireRateLimiting("deployment-key-force-deactivate")
+  .WithDescription("Releases the seat held by an activation matching a caller-supplied deviceId on the deployment key's parent license, authenticated by the deployment key and a recomputed deviceId instead of the activationToken issued at enrollment. deviceId is a self-reported identifier, not a cryptographic proof of device possession - see the trust-model note on DeploymentKeyService.ForceDeactivateAsync - so this is rate-limited far more tightly than enroll and every call is audited. Use only when the local activationToken was lost (e.g. a corrupted enrollment) - if you still hold the activationToken, use POST /api/v1/activations/{activationId}/deactivate instead.");
 
 var adminApi = app.MapGroup("/api/v1/admin").RequireAuthorization().RequireRateLimiting("admin-api").DisableAntiforgery();
 adminApi.MapGet("/authorization/{permission}", async (

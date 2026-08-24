@@ -287,51 +287,83 @@ internal sealed class DeploymentKeyService(
         }
     }
 
-    // Lets a deployment-key holder release the seat held by their own machine when the local
-    // activationToken was lost (e.g. a build shipped with a mismatched key pair, so enrollment
-    // succeeded server-side but the client never persisted the token - see issue #88). deviceId is
-    // recomputed on the caller's machine with the same os-machine-id-sha256-v1 scheme used at
-    // enrollment, so this can only release the seat for the device actually making the call - it
-    // does not let a key holder force-release an arbitrary deviceId they merely observed elsewhere.
+    // Lets a deployment-key holder release the seat held by an activation matching a caller-
+    // supplied deviceId, when the local activationToken was lost (e.g. a build shipped with a
+    // mismatched key pair, so enrollment succeeded server-side but the client never persisted the
+    // token - see issue #88). deviceId is recomputed with the same os-machine-id-sha256-v1 scheme
+    // used at enrollment, but - exactly like enroll's own deviceId handling - it is a deterministic,
+    // self-reported identifier, NOT a cryptographic proof that the call originates on that specific
+    // device: the server cannot verify hardware possession, and the full deviceId hash is embedded
+    // in every signed license artifact (see LicenseStore.CreateLicenseAsync), so anyone who can
+    // read another machine's license file (or clones a VM image before individualization) and also
+    // holds the shared deployment key can force-release that machine's seat. This mirrors the
+    // existing enroll endpoint's trust model (the deployment key is the actual credential; deviceId
+    // is bookkeeping, not authentication) but is more dangerous because it can interrupt an already-
+    // running machine rather than merely contest a free seat. The blast radius is bounded, not
+    // eliminated, by a dedicated - and deliberately much stricter than enroll's - rate limit
+    // ("deployment-key-force-deactivate") plus an audit record on every call, success or rejection,
+    // so repeated or successful abuse is both slow and immediately visible. See the "Recovering a
+    // seat" section of docs/ai/deployment-key-machine-activation.md for the full trust-model
+    // writeup and the guidance to rotate the deployment key if abuse is suspected.
+    //
+    // Every branch below (validation failure, credential failure, and the actual attempt) writes
+    // its rejection/success audit and they all share one Serializable transaction committed exactly
+    // once at the end - deliberately diverging from ForceDeactivateWithinLockAsync's documented
+    // "no transaction, caller commits" contract only in the sense that we are that caller: this
+    // keeps the activation change and every audit record for one call atomic, so a later failure in
+    // this method can never leave the seat released without its audit trail (or vice versa).
     public async Task<StoreResult<LicenseStore.ActiveActivation>> ForceDeactivateAsync(
         ForceDeactivateDeploymentKeyRequest request,
         DateTimeOffset now,
         CancellationToken cancellationToken = default)
     {
+        const string rejectedAction = "deployment-key.force-deactivation-rejected";
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
         var validation = ValidateForceDeactivateRequest(request);
         if (validation is not null)
+        {
+            AddRejectionAudit(null, request.DeploymentKey ?? "unknown", "invalid-request", now, rejectedAction);
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             return StoreResult<LicenseStore.ActiveActivation>.BadRequest(validation);
-        const string rejectedAction = "deployment-key.force-deactivation-rejected";
+        }
         if (!DeploymentKeyFormat.TryParse(request.DeploymentKey, out var publicId, out var secret))
         {
             AddRejectionAudit(null, "unparseable", "malformed-credential", now, rejectedAction);
             await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             return StoreResult<LicenseStore.ActiveActivation>.Unauthorized("Deployment key is invalid.");
         }
 
-        var key = await db.DeploymentKeys.SingleOrDefaultAsync(x => x.PublicId == publicId, cancellationToken);
+        var key = await db.DeploymentKeys
+            .FromSqlInterpolated($"SELECT * FROM \"DeploymentKeys\" WHERE \"PublicId\" = {publicId} FOR UPDATE")
+            .SingleOrDefaultAsync(cancellationToken);
         if (key is null || key.SecretHashVersion != DeploymentKeyHasher.CurrentVersion
             || !hasher.Verify(publicId, secret, key.SecretHash))
         {
             AddRejectionAudit(null, publicId, "invalid-credential", now, rejectedAction);
             await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             return StoreResult<LicenseStore.ActiveActivation>.Unauthorized("Deployment key is invalid.");
         }
         if (key.RevokedAt is not null)
         {
             AddRejectionAudit(key, publicId, "revoked", now, rejectedAction);
             await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             return StoreResult<LicenseStore.ActiveActivation>.Unauthorized("Deployment key has been revoked.");
         }
         if (key.ExpiresAt is not null && key.ExpiresAt <= now)
         {
             AddRejectionAudit(key, publicId, "expired", now, rejectedAction);
             await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             return StoreResult<LicenseStore.ActiveActivation>.Unauthorized("Deployment key has expired.");
         }
 
         var normalizedDeviceId = request.Device!.DeviceId!.ToUpperInvariant();
-        var result = await licenseStore.ForceDeactivateByDeviceAsync(
+        var result = await licenseStore.ForceDeactivateWithinLockAsync(
             key.LicenseRecordId, normalizedDeviceId, now, $"deployment-key:{key.PublicId}", cancellationToken);
 
         if (result.Success)
@@ -348,6 +380,7 @@ internal sealed class DeploymentKeyService(
             AddRejectionAudit(key, publicId, result.Error ?? "rejected", now, rejectedAction);
         }
         await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return result;
     }
 
