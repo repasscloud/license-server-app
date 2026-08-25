@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-08-25
+
+### Added
+
+- New anonymous `POST /api/v1/deployment-keys/force-deactivate` endpoint lets a deployment-key
+  holder release the seat held by an activation matching a caller-supplied `deviceId`, without the
+  `activationToken` issued at enrollment (#88). Authenticated by the deployment key itself and a
+  recomputed `deviceId` (same `os-machine-id-sha256-v1` scheme used at enrollment), scoped to that
+  key's parent license, so a machine that lost its local credentials (e.g. because it enrolled with
+  a build shipping a mismatched primary/secondary key pair, so enrollment succeeded server-side but
+  the client never persisted the token) can recover the seat itself instead of needing a manual
+  admin `activations/{activationId}/deactivate` call. New `LicenseStore.ForceDeactivateWithinLockAsync`
+  and `DeploymentKeyService.ForceDeactivateAsync`; the latter owns one Serializable transaction
+  covering the activation change and every audit record for the call, so a later failure can never
+  leave the seat released without its audit trail. `deviceId` is self-reported (identical to
+  `enroll`'s handling of it), not a cryptographic proof of device possession, and the full hash is
+  embedded in the signed license artifact, so this is rate-limited far more tightly than `enroll` —
+  its own dedicated `deployment-key-force-deactivate` policy, defaulting to 5/minute per
+  deployment-key prefix and 10/minute per IP — and every call, including a validation failure,
+  writes an immutable `AuditRecord` (`deployment-key.force-deactivation-succeeded` /
+  `deployment-key.force-deactivation-rejected`, plus `activation.force-deactivated` on the released
+  activation). See the trust-model writeup in
+  `docs/ai/deployment-key-machine-activation.md` for the full residual-risk discussion and the
+  guidance to rotate the deployment key if abuse is suspected.
+
 ## [0.3.4] - 2026-08-25
 
 ### Added

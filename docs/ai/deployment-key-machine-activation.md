@@ -124,6 +124,78 @@ you just persisted:
 Calling `refresh` on an activation that was enrolled with `mode: "offline"` returns a conflict —
 this is expected behavior, not a bug.
 
+## Recovering a seat when the local `activationToken` is lost
+
+The normal deactivate flow above requires the `activationToken` you persisted at enrollment. If
+that persistence step failed — for example a build shipped with a mismatched deployment-key pair,
+so enrollment succeeded server-side but the client crashed before writing the token to disk — you
+have no local credential to deactivate with, and a retried enrollment fails with a `409 Conflict`
+("License is already active on device ..."). Use force-deactivate instead:
+
+`POST {baseUrl}/api/v1/deployment-keys/force-deactivate`
+
+```json
+{
+  "deploymentKey": "dpk_live_...",
+  "device": {
+    "scheme": "os-machine-id-sha256-v1",
+    "deviceId": "<recomputed on this machine, same as enrollment>"
+  }
+}
+```
+
+This is authenticated by the deployment key (anonymous endpoint, same trust model as `enroll`) and
+the caller's own recomputed `deviceId` — **not** by `activationId`/`activationToken`, since those
+are exactly what's missing. It releases whichever activation currently holds that `deviceId` under
+the deployment key's parent license.
+
+**Trust model — read before relying on this for isolation.** `deviceId` is a deterministic,
+self-reported identifier (the same `os-machine-id-sha256-v1` hash used at enrollment), **not** a
+cryptographic proof that the call originates on that specific device — the server has no way to
+verify hardware possession, exactly as `enroll` itself never verifies it either. The full `deviceId`
+hash is also not secret: it's embedded in every signed license artifact (`deviceBinding.deviceId`
+in the response body), so anyone who can read another machine's license file — a support bundle,
+a backup, a cloned VM image before individualization — and who also holds the shared deployment
+key can force-release *that* machine's seat, not just their own. This mirrors how `enroll` already
+trusts the deployment key holder to claim any `deviceId` they present; force-deactivate is more
+dangerous only because it can interrupt an already-running machine instead of merely contesting a
+free seat. Two things bound (not eliminate) that risk:
+
+- A dedicated rate limit, deliberately much stricter than `enroll`'s: 5/minute per deployment-key
+  prefix (`RateLimits:DeploymentKeyForceDeactivatePermitLimit`) and 10/minute per IP
+  (`RateLimits:DeploymentKeyForceDeactivateIpPermitLimit`), enforced the same two-dimensional way
+  `enroll`'s rate limiting is (see "Rate limiting" above) but as its own independent budget.
+- Every call — successful or rejected, including a malformed/missing-field request — writes an
+  immutable audit record (`activation.force-deactivated` on the released activation plus
+  `deployment-key.force-deactivation-succeeded`/`-rejected` on the key), all committed atomically
+  with the deactivation itself, so a single leaked `deviceId` cannot silently or repeatedly grief a
+  seat without leaving a visible trail. If you see unexpected `deployment-key.force-deactivation-*`
+  audit entries, rotate the deployment key immediately (`POST
+  /api/v1/admin/deployment-keys/{id}/rotate`) — that invalidates the old key's ability to call
+  either `enroll` or `force-deactivate` going forward.
+
+An administrator force-releasing an arbitrary `deviceId` they've merely observed (e.g. in the
+license admin UI's activation history, which only ever shows the 8-character suffix, not the full
+hash) rather than one their own machine computed is a materially different, higher-trust operation;
+that still goes through the internal `POST /api/v1/admin/activations/{activationId}/deactivate`
+route, which requires authenticated admin permission rather than only a deployment key.
+
+Response shape mirrors the normal deactivate response:
+
+```json
+{ "licenseId": "LIC-...", "activationId": "act_...", "status": "deactivated", "deactivatedAt": "..." }
+```
+
+Rate-limited far more tightly than `enroll` (see the trust-model note above; IP dimension +
+deployment-key-prefix dimension, same two-dimensional shape as `enroll`'s limiting, but its own
+lower budget). Every call, successful or rejected, writes an immutable audit record, so
+this is not an unaudited way to grief someone else's seat. Once the seat is released, retry
+`enroll` normally to re-activate this machine and get a fresh `activationToken` to persist.
+
+Use the normal `activations/{activationId}/deactivate` flow whenever you still hold the
+`activationToken` — force-deactivate exists specifically for the "local credentials are gone"
+recovery case.
+
 ## Error responses
 
 All non-2xx responses are [RFC 9457 Problem Details](https://www.rfc-editor.org/rfc/rfc9457)
