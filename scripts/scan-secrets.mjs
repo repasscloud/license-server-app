@@ -10,7 +10,7 @@ const PATTERNS = [
   ['MailerSend token', /\bmlsn\.[A-Za-z0-9]{40,}/],
   ['RePass API token', /\brpl_(pat|svc)_[0-9A-HJKMNP-TV-Z]{16}_[A-Za-z0-9_-]{43}\b/],
   ['PEM private key', /-----BEGIN (EC |RSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/],
-  ['Postgres URL with password', /postgres(ql)?:\/\/[^:\s/]+:(?!\$\{|<|password|PASSWORD|test_only|ci_only)[^@\s]{6,}@/],
+  ['Postgres URL with password', /postgres(ql)?:\/\/[^:\s/]+:(?!\$\{|<|password|PASSWORD|test_only|ci_only|devonly)[^@\s]{6,}@/],
   ['Cloudflare API token', /\bCLOUDFLARE_API_TOKEN\s*=\s*[A-Za-z0-9_-]{30,}/],
 ];
 const ALLOW = [/^tests\/fixtures\//, /^docs\/requirements\/upstream\//, /^package-lock\.json$/];
