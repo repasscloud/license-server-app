@@ -1,0 +1,21 @@
+# Copy to .dev.vars for `npm run dev` (wrangler dev). .dev.vars is gitignored.
+# Generate each 32-byte secret with:  openssl rand -base64 32
+# NEVER reuse these values in staging/production (use `wrangler secret put` there).
+
+# Local PostgreSQL for the Hyperdrive binding is NOT set here; export it in your shell:
+#   export CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE=postgres://repass_runtime:<pw>@127.0.0.1:5432/repass_dev
+
+SIGNING_KEK_V1=
+APP_DATA_KEY_V1=
+MACHINE_PEPPER=
+AUTH_PEPPER=
+API_TOKEN_PEPPER=
+
+# Stripe TEST mode only for local development.
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...   # from `stripe listen --forward-to localhost:8787/webhooks/stripe`
+
+# Optional: real MailerSend in dev (MAIL_TRANSPORT defaults to "capture" locally = log only, NOT delivered)
+# MAIL_TRANSPORT=mailersend
+# MAILERSEND_API_TOKEN=
+# MAILERSEND_WEBHOOK_SECRET=

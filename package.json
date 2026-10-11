@@ -16,17 +16,18 @@
     "test": "vitest run --project unit --project integration",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
-    "test:contract": "vitest run --project unit tests/contract && node scripts/conformance.mjs",
+    "test:contract": "vitest run tests/contract tests/integration/conformance.test.ts",
     "test:workers": "vitest run --project workers",
     "test:all": "vitest run",
     "bench": "vitest run --project perf",
     "db:migrate": "node scripts/migrate.ts",
     "db:seed:dev": "node scripts/seed-dev.ts",
     "admin:bootstrap": "node scripts/bootstrap-admin.ts",
-    "keys:import-test-vectors": "node scripts/import-test-vector-keys.ts",
     "secrets:scan": "node scripts/scan-secrets.mjs",
     "deploy": "wrangler deploy --env production",
-    "types": "wrangler types --include-env=false"
+    "types": "wrangler types --include-env=false",
+    "keys:import": "node scripts/import-signing-key.ts",
+    "openapi": "node scripts/export-openapi.ts"
   },
   "dependencies": {
     "hono": "4.13.13",

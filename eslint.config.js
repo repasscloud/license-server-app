@@ -2,7 +2,7 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist/', '.wrangler/', 'node_modules/', 'coverage/', 'docs/'] },
+  { ignores: ['dist/', '.wrangler/', 'node_modules/', 'coverage/', 'docs/', 'worker-configuration.d.ts', '.claude/', 'artifacts/', 'temp/', 'keys/', 'input/', '.superpowers/'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -15,6 +15,11 @@ export default tseslint.config(
   },
   {
     files: ['scripts/**', 'tests/**'],
-    languageOptions: { globals: { process: 'readonly', console: 'readonly' } },
+    languageOptions: { globals: { process: 'readonly', console: 'readonly', Buffer: 'readonly' } },
+  },
+  {
+    // Test doubles and assertions on untyped JSON responses.
+    files: ['tests/**'],
+    rules: { '@typescript-eslint/no-explicit-any': 'off' },
   },
 );

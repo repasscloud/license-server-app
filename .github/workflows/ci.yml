@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev, 'rewrite/**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Read-only token. CI never deploys and never touches production.
+permissions:
+  contents: read
+
+env:
+  CURSEDELETE_COMMIT: 3ce95266d8452926e9157dc68f51b2b3e95a46e7  # conformance checker version verified in docs/STATUS.md
+
+jobs:
+  verify:
+    name: Lint, typecheck, test, package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: ci_only_password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://postgres:ci_only_password@127.0.0.1:5432/postgres
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5 # TODO(owner): pin to a commit SHA per supply-chain policy
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install PostgreSQL 18 client tools (pg_dump/pg_restore for key portability tests)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-18
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Secret scan
+        run: npm run secrets:scan
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck (Worker + Node programs)
+        run: npm run typecheck
+
+      - name: Unit, contract and integration tests (real PostgreSQL)
+        run: npx vitest run --project unit --project integration
+
+      - name: Build CurseDelete conformance checker (pinned)
+        run: |
+          git clone --quiet https://github.com/repasscloud/cursedelete-2 /tmp/cursedelete-2
+          git -C /tmp/cursedelete-2 checkout --quiet "$CURSEDELETE_COMMIT"
+          cargo build --quiet --manifest-path /tmp/cursedelete-2/Cargo.toml -p cursdel-license --example conformance
+          echo "CURSEDELETE_CONFORMANCE_BIN=/tmp/cursedelete-2/target/debug/examples/conformance" >> "$GITHUB_ENV"
+
+      - name: Real-client conformance (CurseDelete verifier)
+        run: npx vitest run --project integration tests/integration/conformance.test.ts
+
+      - name: Workers runtime test (workerd + Hyperdrive local binding)
+        run: npx vitest run --project workers
+
+      - name: Package Worker (wrangler dry-run)
+        run: npm run build
+
+      - name: OpenAPI document is up to date
+        run: |
+          npm run openapi
+          git diff --exit-code docs/api/openapi.json

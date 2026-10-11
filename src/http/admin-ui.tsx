@@ -646,11 +646,20 @@ adminUi.get('/licenses', async (c) => {
   });
 });
 
+interface LicenceView {
+  license_id: string; status: string; review_required: boolean; review_reason: string | null; customer_id: string; customer_display_name: string;
+  product_name: string; major_version: number; edition_name: string; term_type: string; expires_at: Date | null; seats: number | null;
+  current_issued_at: Date | null; current_key_ids: string[]; activationKeyHint: string | null; revoked_reason: string | null; revoked_at: Date | null;
+  activation_model: string; organisation_name: string | null; snapshot: unknown;
+  activations: Array<{ id: string; device_suffix: string; status: string; activated_at: Date; last_validated_at: Date | null; deactivated_at: Date | null; deactivated_by: string | null; counted_as_transfer: boolean }>;
+  issuances: Array<{ issued_at: Date; artifact: string; activation_id: string | null; key_ids: string[]; reason: string; actor: string }>;
+}
+
 adminUi.get('/licenses/:id', async (c) => {
   const sql = c.get('deps').sql;
-  const l = await getLicenseDetail(sql, c.req.param('id')) as Awaited<ReturnType<typeof getLicenseDetail>> & Record<string, any>;
+  const l = (await getLicenseDetail(sql, c.req.param('id'))) as unknown as LicenceView;
   const t = l.activation_model === 'device_seats' ? await licensing.transferStatus(sql, l.license_id) : null;
-  const id = l.license_id as string;
+  const id = l.license_id;
   const F = ({ path, children }: { path: string; children?: Child }) => <form method="post" action={`/admin/licenses/${id}/${path}`} class="card"><Csrf token={c.get('csrf')} />{children}</form>;
   return render(c, {
     title: id,
@@ -662,7 +671,7 @@ adminUi.get('/licenses/:id', async (c) => {
           <div><span class="muted">Product</span><br />{l.product_name} v{l.major_version} · {l.edition_name}</div>
           <div><span class="muted">Term</span><br />{l.term_type} · {l.expires_at ? `until ${fmt(l.expires_at)}` : 'perpetual'}</div>
           <div><span class="muted">Seats</span><br />{l.seats ?? '—'}</div>
-          <div><span class="muted">Last issued</span><br />{fmt(l.current_issued_at)} ({(l.current_key_ids as string[]).join(', ')})</div>
+          <div><span class="muted">Last issued</span><br />{fmt(l.current_issued_at)} ({l.current_key_ids.join(', ')})</div>
           <div><span class="muted">Activation key</span><br />…{l.activationKeyHint ?? '—'}</div>
         </div>{l.revoked_reason ? <p>Revoked: {l.revoked_reason} ({fmt(l.revoked_at)})</p> : null}
           <p><a class="button secondary" href={`/admin/licenses/${id}/file`}>Download licence file</a></p>
@@ -672,7 +681,7 @@ adminUi.get('/licenses/:id', async (c) => {
             <h2>Devices</h2>
             <p>Transfers in the last 365 days: {t!.used} used, {t!.granted} granted, {t!.remaining} of {t!.allowance} remaining.</p>
             <div class="table-wrap"><table><thead><tr><th>Activation</th><th>Device</th><th>Status</th><th>Activated</th><th>Last validated</th><th>Released</th><th></th></tr></thead><tbody>
-              {(l.activations as Array<Record<string, any>>).map((a) => <tr><td><code>{a.id}</code>{a.counted_as_transfer ? <span class="muted"> (transfer)</span> : null}</td><td>…{a.device_suffix}</td><td><Badge v={a.status} /></td><td>{fmt(a.activated_at)}</td><td>{fmt(a.last_validated_at)}</td><td>{a.deactivated_at ? `${fmt(a.deactivated_at)} by ${a.deactivated_by}` : ''}</td>
+              {l.activations.map((a) => <tr><td><code>{a.id}</code>{a.counted_as_transfer ? <span class="muted"> (transfer)</span> : null}</td><td>…{a.device_suffix}</td><td><Badge v={a.status} /></td><td>{fmt(a.activated_at)}</td><td>{fmt(a.last_validated_at)}</td><td>{a.deactivated_at ? `${fmt(a.deactivated_at)} by ${a.deactivated_by}` : ''}</td>
                 <td>{a.status === 'active' && can(c, 'activations:release') ? <form class="inline" method="post" action={`/admin/activations/${a.id}/release`}><Csrf token={c.get('csrf')} /><input type="hidden" name="licenseId" value={id} /><button class="secondary" type="submit">Release</button></form> : null}</td></tr>)}
             </tbody></table></div>
             {can(c, 'transfers:write') ? <div class="row">
@@ -692,7 +701,7 @@ adminUi.get('/licenses/:id', async (c) => {
         </div>
         <h2>Issuance history</h2>
         <div class="table-wrap"><table><thead><tr><th>When</th><th>Artifact</th><th>Keys</th><th>Reason</th><th>Actor</th></tr></thead><tbody>
-          {(l.issuances as Array<Record<string, any>>).map((i) => <tr><td>{fmt(i.issued_at)}</td><td>{i.artifact}{i.activation_id ? ` ${i.activation_id}` : ''}</td><td>{(i.key_ids as string[]).join(', ')}</td><td>{i.reason}</td><td>{i.actor}</td></tr>)}
+          {l.issuances.map((i) => <tr><td>{fmt(i.issued_at)}</td><td>{i.artifact}{i.activation_id ? ` ${i.activation_id}` : ''}</td><td>{i.key_ids.join(', ')}</td><td>{i.reason}</td><td>{i.actor}</td></tr>)}
         </tbody></table></div>
         <h2>Policy snapshot</h2><details><summary>Show effective policy frozen at purchase</summary><code>{JSON.stringify(l.snapshot)}</code></details>
       </>

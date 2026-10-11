@@ -137,7 +137,7 @@ interface StripeSession {
   line_items?: { data: Array<{ price: { id: string }; quantity: number }> };
 }
 
-const idOf = (v: string | { id: string } | null | undefined): string | null => (v == null ? null : typeof v === 'string' ? v : v.id);
+const idOf = (v: string | { id: string } | null | undefined): string | null => (v === null || v === undefined ? null : typeof v === 'string' ? v : v.id);
 
 export async function handleCheckoutSession(sql: Sql, config: Config, stripe: StripeClient, actor: Actor, sessionId: string, now = new Date()): Promise<string> {
   // Authoritative current state, never the (possibly stale) webhook copy.

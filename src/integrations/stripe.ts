@@ -87,7 +87,7 @@ export class StripeClient {
       throw new StripeError(`Stripe network error: ${(e as Error)?.name ?? ''} ${(e as Error)?.message ?? e}`, 0, true);
     }
     const text = await res.text();
-    let json: Record<string, unknown> = {};
+    let json: Record<string, unknown>;
     try {
       json = text ? JSON.parse(text) : {};
     } catch {
