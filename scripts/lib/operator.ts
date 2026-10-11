@@ -8,9 +8,9 @@ export function operatorEnv(): Env {
   return {
     ENVIRONMENT: e.ENVIRONMENT ?? 'production',
     PUBLIC_BASE_URL: e.PUBLIC_BASE_URL ?? 'https://license-server.repasscloud.com',
-    MAIL_FROM_EMAIL: e.MAIL_FROM_EMAIL ?? 'licensing@repasscloud.com',
+    MAIL_FROM_EMAIL: e.MAIL_FROM_EMAIL ?? 'hello@repasscloud.com',
     MAIL_FROM_NAME: e.MAIL_FROM_NAME ?? 'RePassCloud Licensing',
-    SUPPORT_EMAIL: e.SUPPORT_EMAIL ?? 'support@repasscloud.com',
+    SUPPORT_EMAIL: e.SUPPORT_EMAIL ?? 'hello@repasscloud.com',
     STRIPE_API_VERSION: e.STRIPE_API_VERSION ?? '2026-08-26.dahlia',
     SIGNING_KEK_ACTIVE_VERSION: e.SIGNING_KEK_ACTIVE_VERSION ?? '1',
     APP_DATA_KEY_ACTIVE_VERSION: e.APP_DATA_KEY_ACTIVE_VERSION ?? '1',
