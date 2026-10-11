@@ -33,4 +33,4 @@ postgres-data/
 # Legacy local scratch script (pre-rewrite), intentionally untracked
 scripts/test-publish.sh
 worker-configuration.d.ts
-x.txt
+x*.txt
