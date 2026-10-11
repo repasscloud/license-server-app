@@ -196,7 +196,7 @@ describe('catalogue onboarding through the admin API (no redeploy, data only)', 
     await drain();
     expect(stripe.prices.size).toBe(4);
     // Immutable price history: amount changes are rejected at the database level.
-    await expect(sql`UPDATE price_versions SET unit_amount = 1 WHERE id = ${ids['price_cd2-enterprise']}`).rejects.toThrow(/immutable/);
+    await expect(sql`UPDATE price_versions SET unit_amount = 1 WHERE id = ${ids['price_cd2-enterprise']!}`).rejects.toThrow(/immutable/);
   });
 });
 
@@ -413,7 +413,7 @@ describe('pricing changes, drift and provider outages', () => {
     await ok('POST', '/stripe/sync', { priceVersionId: created.id, wait: true });
     await ok('POST', `/prices/${created.id}/activate`);
     await drain(); // archive job deactivates the old Stripe price
-    const oldStripe = (await sql<{ stripe_price_id: string }[]>`SELECT stripe_price_id FROM stripe_price_mappings WHERE price_version_id = ${ids['price_cd2-enterprise']}`)[0]!.stripe_price_id;
+    const oldStripe = (await sql<{ stripe_price_id: string }[]>`SELECT stripe_price_id FROM stripe_price_mappings WHERE price_version_id = ${ids['price_cd2-enterprise']!}`)[0]!.stripe_price_id;
     expect(stripe.prices.get(oldStripe)!.active).toBe(false);
     const c = await checkout('cd2-enterprise', 'new@buyer.example');
     const s = stripe.sessions.get(sessionIdFrom(c.location))!;
@@ -425,7 +425,7 @@ describe('pricing changes, drift and provider outages', () => {
   it('drift in Stripe blocks sales until explicitly repaired', async () => {
     const pv = (await sql<{ price_version_id: string; stripe_price_id: string }[]>`
       SELECT m.price_version_id, m.stripe_price_id FROM stripe_price_mappings m JOIN price_versions p ON p.id = m.price_version_id
-      WHERE p.offer_id = ${ids['offer_cd2-community-reg']} AND p.status = 'active'`)[0]!;
+      WHERE p.offer_id = ${ids['offer_cd2-community-reg']!} AND p.status = 'active'`)[0]!;
     stripe.prices.get(pv.stripe_price_id)!.active = false; // someone archived it in the Stripe dashboard
     await ok('POST', '/stripe/drift-check');
     const c = await checkout('cd2-community-reg', 'x@y.example');

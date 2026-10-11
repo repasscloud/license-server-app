@@ -72,8 +72,10 @@ export function buildActivationClaimsV1(i: ActivationClaimsInput): Record<string
 }
 
 export class ClaimsError extends Error {
-  constructor(readonly problems: string[]) {
+  readonly problems: string[];
+  constructor(problems: string[]) {
     super(`invalid v1 claims: ${problems.join('; ')}`);
+    this.problems = problems;
   }
 }
 

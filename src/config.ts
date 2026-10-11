@@ -32,8 +32,10 @@ export interface Env {
 }
 
 export class ConfigError extends Error {
-  constructor(readonly missing: string[]) {
+  readonly missing: string[];
+  constructor(missing: string[]) {
     super(`server configuration incomplete: ${missing.join(', ')}`);
+    this.missing = missing;
   }
 }
 

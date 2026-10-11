@@ -361,7 +361,9 @@ export async function loadSigners(db: Db, kek: Keyring, productMajorId: string, 
   if (usable.length > maxSignatures) throw new AppError('internal', 'More eligible keys than the protocol allows');
   const out: Signer[] = [];
   for (const r of usable) {
-    const cacheKey = `${r.signing_key_id}:${r.kek_version}:${await sha256Hex(toBytes(r.ciphertext))}`;
+    // Bound to the KEK material fingerprint and the exact ciphertext, so a different KEK or a
+    // rewrapped/replaced secret never reuses a previously decrypted key.
+    const cacheKey = `${r.signing_key_id}:${r.kek_version}:${await kek.fingerprint(r.kek_version)}:${await sha256Hex(toBytes(r.ciphertext))}`;
     let p = signerCache.get(cacheKey);
     if (!p) {
       p = (async () => {

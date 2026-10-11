@@ -1,5 +1,6 @@
 // Drive the real Hono app (all middleware, routes, services) in Node against real PostgreSQL.
-import { app } from '../../src/app.tsx';
+import type { ExecutionContext } from 'hono';
+import { handleFetch } from '../../src/router.ts';
 import type { Env } from '../../src/config.ts';
 import type { Sql } from '../../src/db/client.ts';
 import { createApiToken } from '../../src/services/admins.ts';
@@ -39,7 +40,7 @@ export class Client {
     }
     if (init.token) headers.set('authorization', `Bearer ${init.token}`);
     const ctx = new TestCtx();
-    const res = await app.request(`${this.base}${path}`, { ...init, headers, body, redirect: 'manual' }, this.env, ctx as unknown as ExecutionContext);
+    const res = await handleFetch(new Request(`${this.base}${path}`, { ...init, headers, body, redirect: 'manual' }), this.env, ctx as unknown as ExecutionContext);
     await ctx.settle();
     for (const sc of res.headers.getSetCookie?.() ?? []) {
       const [pair, ...attrs] = sc.split(';');

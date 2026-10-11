@@ -30,12 +30,12 @@ const STATUS: Record<AppErrorCode, number> = {
 
 export class AppError extends Error {
   readonly status: number;
-  constructor(
-    readonly code: AppErrorCode,
-    message: string,
-    readonly details?: unknown,
-  ) {
+  readonly code: AppErrorCode;
+  readonly details?: unknown;
+  constructor(code: AppErrorCode, message: string, details?: unknown) {
     super(message);
+    this.code = code;
+    this.details = details;
     this.status = STATUS[code];
   }
 }

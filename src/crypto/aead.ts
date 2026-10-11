@@ -16,6 +16,8 @@ export interface Keyring {
   readonly activeVersion: number;
   key(version: number): Promise<CryptoKey>;
   hasVersion(version: number): boolean;
+  /** Non-secret fingerprint of a version's key material (cache binding, diagnostics). */
+  fingerprint(version: number): Promise<string>;
 }
 
 export function keyringFromEnv(
@@ -30,10 +32,22 @@ export function keyringFromEnv(
     const s = env[`${name}_V${v}`];
     return typeof s === 'string' && s.length > 0 ? s : undefined;
   };
+  const fps = new Map<number, Promise<string>>();
   return {
     name,
     activeVersion,
     hasVersion: (v) => material(v) !== undefined,
+    fingerprint(version) {
+      let p = fps.get(version);
+      if (!p) {
+        const m = material(version);
+        if (!m) return Promise.reject(new KeyringError(`${name}_V${version} is not configured`));
+        p = crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${name}|${version}|${m}`)).then((d) =>
+          [...new Uint8Array(d)].slice(0, 12).map((b) => b.toString(16).padStart(2, '0')).join(''));
+        fps.set(version, p);
+      }
+      return p;
+    },
     key(version) {
       let p = cache.get(version);
       if (!p) {

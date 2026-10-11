@@ -4,14 +4,15 @@
 // staging/production.
 
 export class MailError extends Error {
-  constructor(
-    message: string,
-    readonly retryable: boolean,
-    readonly retryAfterSeconds?: number,
-    /** The provider may have accepted the message (e.g. timeout after sending). */
-    readonly uncertain = false,
-  ) {
+  readonly retryable: boolean;
+  readonly retryAfterSeconds?: number;
+  /** The provider may have accepted the message (e.g. timeout after sending). */
+  readonly uncertain: boolean;
+  constructor(message: string, retryable: boolean, retryAfterSeconds?: number, uncertain = false) {
     super(message);
+    this.retryable = retryable;
+    this.retryAfterSeconds = retryAfterSeconds;
+    this.uncertain = uncertain;
   }
 }
 
@@ -35,11 +36,14 @@ export interface MailTransport {
 
 export class MailerSendTransport implements MailTransport {
   readonly kind = 'mailersend';
-  constructor(
-    private readonly token: string,
-    private readonly base = 'https://api.mailersend.com',
-    private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
+  private readonly token: string;
+  private readonly base: string;
+  private readonly fetchImpl: typeof fetch;
+  constructor(token: string, base = 'https://api.mailersend.com', fetchImpl: typeof fetch = (...a) => fetch(...a)) {
+    this.token = token;
+    this.base = base;
+    this.fetchImpl = fetchImpl;
+  }
 
   async send(m: OutgoingMail): Promise<{ messageId: string }> {
     const body: Record<string, unknown> = {

@@ -182,7 +182,9 @@ export async function loadLicenseContext(db: Db, licenseId: string, forUpdate = 
     productMajorId: r.product_major_id as string,
     productSlug: r.slug as string,
     majorVersion: r.major_version as number,
-    policy: EffectivePolicySchema.parse(r.snapshot),
+    // Snapshots are validated with EffectivePolicySchema when written and are append-only, so
+    // the hot path trusts the stored shape instead of re-parsing it on every request.
+    policy: r.snapshot as EffectivePolicy,
     currentEnvelope: (r.current_envelope as Envelope | null) ?? null,
     currentIssuedAt: (r.current_issued_at as Date | null) ?? null,
     entitlementUpdatedAt: r.updated_at as Date,
@@ -191,8 +193,10 @@ export async function loadLicenseContext(db: Db, licenseId: string, forUpdate = 
 }
 
 export class LicensingRefusal extends Error {
-  constructor(readonly code: 'revoked' | 'subscription_expired', message: string) {
+  readonly code: 'revoked' | 'subscription_expired';
+  constructor(code: 'revoked' | 'subscription_expired', message: string) {
     super(message);
+    this.code = code;
   }
 }
 

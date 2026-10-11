@@ -4,7 +4,7 @@
 // A migrated template database is created; each test file clones it (see tests/helpers/db.ts).
 
 import { execFileSync, execSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,9 +50,18 @@ export default async function setup(project: TestProject) {
   tplUrl.pathname = `/${template}`;
   const tpl = postgres(tplUrl.toString(), { max: 1, onnotice: () => {} });
   await migrate(tpl, fileURLToPath(new URL('../../migrations', import.meta.url)));
+  // Apply the production least-privilege grants (sql/roles.sql) to the template so cloned test
+  // databases carry them; the workerd test connects as repass_runtime.
+  const runtimePassword = 'test_only_runtime_pw';
+  await tpl.unsafe(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'repass_runtime') THEN CREATE ROLE repass_runtime LOGIN PASSWORD '${runtimePassword}'; END IF; END $$`);
+  const roles = readFileSync(fileURLToPath(new URL('../../sql/roles.sql', import.meta.url)), 'utf8')
+    .split('\n').filter((l) => !l.startsWith('\\') && !l.includes(":'runtime_password'") && !/^SELECT format|^WHERE NOT EXISTS/.test(l)).join('\n');
+  await tpl.unsafe(roles);
+  await tpl.unsafe(`ALTER ROLE repass_runtime PASSWORD '${runtimePassword}'`);
   await tpl.end();
   await admin.end();
   project.provide('pgAdminUrl', adminUrl);
+  project.provide('pgRuntimeAuth', `repass_runtime:${runtimePassword}`);
   project.provide('pgTemplate', template);
   return async () => {
     const a = postgres(adminUrl!, { max: 1, onnotice: () => {} });
@@ -66,5 +75,6 @@ declare module 'vitest' {
   export interface ProvidedContext {
     pgAdminUrl: string;
     pgTemplate: string;
+    pgRuntimeAuth: string;
   }
 }

@@ -1,6 +1,6 @@
 /** @jsxImportSource hono/jsx */
 // Composition root: one Worker, logically isolated route groups.
-//   /v1/*              binding machine API (activation key / client secret)
+//   (/v1/* binding machine API is dispatched separately in router.ts)
 //   /webhooks/*        Stripe + MailerSend (signature-verified)
 //   /api/admin/v1/*    admin REST API (bearer tokens only)
 //   /admin/*           admin portal (admin cookie realm + TOTP)
@@ -11,7 +11,6 @@ import { Hono } from 'hono';
 import { adminApi } from './http/admin-api.ts';
 import { adminUi } from './http/admin-ui.tsx';
 import { type AppEnv, baseMiddleware, bodyLimit, logError, securityHeaders } from './http/context.ts';
-import { machine } from './http/machine.ts';
 import { portalUi, storeUi } from './http/portal-ui.tsx';
 import { webhooks } from './http/webhooks.ts';
 import { APP_CSS } from './views/assets.ts';
@@ -25,7 +24,6 @@ app.get('/assets/app.css', (c) => c.body(APP_CSS, 200, { 'Content-Type': 'text/c
 app.get('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /\n'));
 
 app.use('*', baseMiddleware);
-app.use('/v1/*', bodyLimit(16 * 1024));
 app.use('/api/*', bodyLimit(256 * 1024));
 app.use('/admin/*', bodyLimit(256 * 1024));
 app.use('/portal/*', bodyLimit(32 * 1024));
@@ -41,7 +39,6 @@ app.get('/readyz', async (c) => {
   }
 });
 
-app.route('/v1', machine);
 app.route('/webhooks', webhooks);
 app.route('/api/admin/v1', adminApi);
 app.route('/admin', adminUi);
@@ -61,5 +58,5 @@ app.get('/', (c) => c.html(
 app.notFound((c) => (c.req.path.startsWith('/api/') || c.req.path.startsWith('/v1/') ? c.json({ error: 'not_found', message: 'Not found.' }, 404) : c.text('Not found', 404)));
 app.onError((e, c) => {
   logError(c, e);
-  return c.req.path.startsWith('/v1/') ? c.json({ error: 'server_error', message: 'The licensing server is temporarily unavailable.' }, 503) : c.text('Internal error', 500);
+  return c.req.path.startsWith('/api/') ? c.json({ error: { code: 'internal', message: 'Internal error' } }, 500) : c.text('Internal error', 500);
 });

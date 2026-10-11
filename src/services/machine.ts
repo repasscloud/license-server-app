@@ -4,7 +4,6 @@
 // and protected by a partial unique index; signing happens inside the same transaction so any
 // failure (e.g. no eligible key) rolls back the seat.
 
-import { z } from 'zod';
 import type { Config } from '../config.ts';
 import type { Envelope } from '../crypto/envelope.ts';
 import { constantTimeEqual } from '../crypto/hashing.ts';
@@ -54,30 +53,64 @@ const MESSAGES: Record<MachineErrorCode, string> = {
 };
 
 export class MachineError extends Error {
-  constructor(readonly code: MachineErrorCode, message = MESSAGES[code]) {
+  readonly code: MachineErrorCode;
+  constructor(code: MachineErrorCode, message = MESSAGES[code]) {
     super(message);
+    this.code = code;
   }
   get status() {
     return MACHINE_STATUS[this.code];
   }
 }
 
-const printable = (max: number) => z.string().min(1).max(max).regex(/^[\x21-\x7e]+$/);
-const clientSecret = z.string().regex(/^[A-Za-z0-9_-]{43}$/).refine((s) => {
+// Hand-written validators (not zod) on the hot path: they cost no first-use compilation, which
+// matters for cold-isolate CPU on Workers Free. Bodies are strict: unknown fields are rejected.
+type Parsed<T> = { success: true; data: T } | { success: false };
+const PRINTABLE = /^[\x21-\x7e]+$/;
+const isPrintable = (v: unknown, max: number): v is string => typeof v === 'string' && v.length >= 1 && v.length <= max && PRINTABLE.test(v);
+const isWireId = (v: unknown): v is string => typeof v === 'string' && WIRE_ID_RE.test(v);
+const isMajor = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 1_000_000;
+function isClientSecret(v: unknown): v is string {
+  if (typeof v !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(v)) return false;
   try {
-    return base64UrlDecode(s).length === 32;
+    return base64UrlDecode(v).length === 32;
   } catch {
     return false;
   }
-}, 'clientSecret must be base64url of 32 bytes');
-const product = { productId: z.string().regex(WIRE_ID_RE), majorVersion: z.number().int().min(0).max(1_000_000) };
+}
+const onlyKeys = (o: Record<string, unknown>, allowed: string[]) => Object.keys(o).every((k) => allowed.includes(k));
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-export const ActivateBody = z.object({ ...product, activationKey: printable(256), deviceId: printable(256), clientSecret }).strict();
-export const RenewBody = z.object({
-  ...product,
-  activation: z.object({ activationId: z.string().regex(WIRE_ID_RE), deviceId: printable(256), clientSecret }).strict().optional().nullable(),
-}).strict();
-export const DeactivateBody = z.object({ ...product, deviceId: printable(256), clientSecret }).strict();
+export interface ActivateInput { productId: string; majorVersion: number; activationKey: string; deviceId: string; clientSecret: string }
+export interface RenewInput { productId: string; majorVersion: number; activation?: { activationId: string; deviceId: string; clientSecret: string } | null }
+export interface DeactivateInput { productId: string; majorVersion: number; deviceId: string; clientSecret: string }
+
+export const ActivateBody = {
+  safeParse(b: unknown): Parsed<ActivateInput> {
+    if (!isObj(b) || !onlyKeys(b, ['productId', 'majorVersion', 'activationKey', 'deviceId', 'clientSecret'])) return { success: false };
+    if (!isWireId(b.productId) || !isMajor(b.majorVersion) || !isPrintable(b.activationKey, 256) || !isPrintable(b.deviceId, 256) || !isClientSecret(b.clientSecret)) return { success: false };
+    return { success: true, data: b as unknown as ActivateInput };
+  },
+};
+
+export const RenewBody = {
+  safeParse(b: unknown): Parsed<RenewInput> {
+    if (!isObj(b) || !onlyKeys(b, ['productId', 'majorVersion', 'activation']) || !isWireId(b.productId) || !isMajor(b.majorVersion)) return { success: false };
+    const a = b.activation;
+    if (a !== undefined && a !== null) {
+      if (!isObj(a) || !onlyKeys(a, ['activationId', 'deviceId', 'clientSecret']) || !isWireId(a.activationId) || !isPrintable(a.deviceId, 256) || !isClientSecret(a.clientSecret)) return { success: false };
+    }
+    return { success: true, data: b as unknown as RenewInput };
+  },
+};
+
+export const DeactivateBody = {
+  safeParse(b: unknown): Parsed<DeactivateInput> {
+    if (!isObj(b) || !onlyKeys(b, ['productId', 'majorVersion', 'deviceId', 'clientSecret'])) return { success: false };
+    if (!isWireId(b.productId) || !isMajor(b.majorVersion) || !isPrintable(b.deviceId, 256) || !isClientSecret(b.clientSecret)) return { success: false };
+    return { success: true, data: b as unknown as DeactivateInput };
+  },
+};
 
 export interface MachineResponse {
   license: Envelope;
@@ -95,7 +128,7 @@ function mapRefusal(e: unknown): never {
 }
 
 /** POST /v1/activations */
-export async function activate(sql: Sql, config: Config, actor: Actor, body: z.infer<typeof ActivateBody>, now = new Date()): Promise<MachineResponse> {
+export async function activate(sql: Sql, config: Config, actor: Actor, body: ActivateInput, now = new Date()): Promise<MachineResponse> {
   const canonical = normaliseActivationKey(body.activationKey);
   if (!canonical) {
     await audit(sql, actor, { action: 'machine.activate', outcome: 'failure', detail: { error: 'invalid_key' } });
@@ -185,7 +218,7 @@ async function verifyActivationCredentials(
 }
 
 /** POST /v1/licenses/{licenseId}/renew */
-export async function renew(sql: Sql, config: Config, actor: Actor, licenseId: string, body: z.infer<typeof RenewBody>, now = new Date()): Promise<MachineResponse> {
+export async function renew(sql: Sql, config: Config, actor: Actor, licenseId: string, body: RenewInput, now = new Date()): Promise<MachineResponse> {
   if (!WIRE_ID_RE.test(licenseId)) throw new MachineError('invalid_request');
   try {
     return await sql.begin(async (tx) => {
@@ -215,7 +248,7 @@ export async function renew(sql: Sql, config: Config, actor: Actor, licenseId: s
 }
 
 /** POST /v1/activations/{activationId}/deactivate — releases the seat even when revoked. */
-export async function deactivate(sql: Sql, config: Config, actor: Actor, activationId: string, body: z.infer<typeof DeactivateBody>, now = new Date()): Promise<void> {
+export async function deactivate(sql: Sql, config: Config, actor: Actor, activationId: string, body: DeactivateInput, now = new Date()): Promise<void> {
   if (!WIRE_ID_RE.test(activationId)) throw new MachineError('invalid_request');
   try {
     await sql.begin(async (tx) => {

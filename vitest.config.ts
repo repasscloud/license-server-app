@@ -22,6 +22,16 @@ export default defineConfig({
       },
       {
         test: {
+          name: 'perf',
+          include: ['tests/performance/**/*.test.ts'],
+          environment: 'node',
+          globalSetup: ['tests/helpers/pg-global-setup.ts'],
+          testTimeout: 300_000,
+          hookTimeout: 120_000,
+        },
+      },
+      {
+        test: {
           name: 'workers',
           include: ['tests/workers/**/*.test.ts'],
           environment: 'node',

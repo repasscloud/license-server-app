@@ -5,14 +5,16 @@
 import { encodeUtf8, hexDecode, timingSafeEqual } from '../lib/encoding.ts';
 
 export class StripeError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly retryable: boolean,
-    readonly code?: string,
-    readonly type?: string,
-  ) {
+  readonly status: number;
+  readonly retryable: boolean;
+  readonly code?: string;
+  readonly type?: string;
+  constructor(message: string, status: number, retryable: boolean, code?: string, type?: string) {
     super(message);
+    this.status = status;
+    this.retryable = retryable;
+    this.code = code;
+    this.type = type;
   }
 }
 
@@ -47,7 +49,9 @@ export interface StripeClientOptions {
 export class StripeClient {
   private readonly base: string;
   private readonly fetchImpl: typeof fetch;
-  constructor(private readonly opts: StripeClientOptions) {
+  private readonly opts: StripeClientOptions;
+  constructor(opts: StripeClientOptions) {
+    this.opts = opts;
     this.base = opts.baseUrl ?? 'https://api.stripe.com';
     this.fetchImpl = opts.fetchImpl ?? ((...a) => fetch(...a));
   }

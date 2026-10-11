@@ -1,12 +1,12 @@
 // Worker entry point: HTTP (Hono app) + Cron Triggers (durable background work).
 
-import { app } from './app.tsx';
+import { handleFetch } from './router.ts';
 import type { Env } from './config.ts';
 import { makeDeps } from './http/context.ts';
 import { dailyTick, frequentTick } from './jobs/runner.ts';
 
 export default {
-  fetch: app.fetch,
+  fetch: handleFetch,
 
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     const deps = makeDeps(env);

@@ -9,7 +9,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false wrangler dev",
     "build": "npm run types --silent && wrangler deploy --dry-run --outdir dist",
     "typecheck": "npm run types --silent && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "lint": "eslint .",
@@ -19,7 +19,7 @@
     "test:contract": "vitest run --project unit tests/contract && node scripts/conformance.mjs",
     "test:workers": "vitest run --project workers",
     "test:all": "vitest run",
-    "bench": "node scripts/bench-crypto.ts",
+    "bench": "vitest run --project perf",
     "db:migrate": "node scripts/migrate.ts",
     "db:seed:dev": "node scripts/seed-dev.ts",
     "admin:bootstrap": "node scripts/bootstrap-admin.ts",

@@ -288,8 +288,12 @@ export async function listApiTokens(db: Db, actor: Actor) {
 }
 
 export class TokenAuthError extends Error {
-  constructor(readonly code: 'unauthorized' | 'forbidden' | 'rate_limited', message: string, readonly retryAfter = 0) {
+  readonly code: 'unauthorized' | 'forbidden' | 'rate_limited';
+  readonly retryAfter: number;
+  constructor(code: 'unauthorized' | 'forbidden' | 'rate_limited', message: string, retryAfter = 0) {
     super(message);
+    this.code = code;
+    this.retryAfter = retryAfter;
   }
 }
 
