@@ -1,8 +1,0 @@
-@page "/status"
-@attribute [Authorize(Policy = Permissions.AuditRead)]
-@inject ApplicationDbContext Database
-@inject IWebHostEnvironment Environment
-<PageTitle>System status</PageTitle><div class="page-heading"><div><p class="eyebrow">Readiness</p><h1>System status</h1><p>Non-secret application and database health.</p></div></div>
-<div class="metric-grid status-grid"><article class="metric"><span>Application</span><strong class="healthy">Ready</strong><small>.NET @Environment.VersionLabel()</small></article><article class="metric"><span>PostgreSQL</span><strong class="@(databaseReady ? "healthy" : "unhealthy")">@(databaseReady ? "Ready" : "Unavailable")</strong><small>Connectivity only; no credentials exposed</small></article><article class="metric"><span>Environment</span><strong>@Environment.EnvironmentName</strong><small>Server-side rendering</small></article></div>
-<article class="panel"><h2>Health endpoints</h2><dl><dt>Liveness</dt><dd><code>/health/live</code></dd><dt>Readiness</dt><dd><code>/health/ready</code></dd></dl><p class="notice">These endpoints expose only aggregate state. Connection strings, signing-key paths, credentials, and tokens are never included.</p></article>
-@code { private bool databaseReady; protected override async Task OnInitializedAsync() => databaseReady = await Database.Database.CanConnectAsync(); }

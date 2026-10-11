@@ -1,0 +1,49 @@
+{
+  "name": "repass-license-server",
+  "version": "1.0.0-rc.1",
+  "private": true,
+  "description": "RePassCloud multi-product licensing and commerce platform on Cloudflare Workers + PostgreSQL",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run --project unit --project integration",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:contract": "vitest run --project unit tests/contract && node scripts/conformance.mjs",
+    "test:workers": "vitest run --project workers",
+    "test:all": "vitest run",
+    "bench": "node scripts/bench-crypto.ts",
+    "db:migrate": "node scripts/migrate.ts",
+    "db:seed:dev": "node scripts/seed-dev.ts",
+    "admin:bootstrap": "node scripts/bootstrap-admin.ts",
+    "keys:import-test-vectors": "node scripts/import-test-vector-keys.ts",
+    "secrets:scan": "node scripts/scan-secrets.mjs",
+    "deploy": "wrangler deploy --env production"
+  },
+  "dependencies": {
+    "hono": "4.13.13",
+    "postgres": "3.4.9",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261011.1",
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.6.5",
+    "eslint": "10.12.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vitest": "4.1.11",
+    "wrangler": "4.149.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "workerd@1.20261006.1": true
+  }
+}
