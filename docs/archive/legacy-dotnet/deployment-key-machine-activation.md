@@ -68,7 +68,7 @@ Field-by-field requirements (the server validates all of these and returns `400 
 a specific message if any is wrong):
 
 | Field | Requirement |
-|---|---|
+| --- | --- |
 | `deploymentKey` | Must match the exact format `dpk_live_<16 hex chars>_<43-char base64url secret>`. Anything else is rejected before the credential is even looked up. |
 | `requestId` | Must parse as a GUID. Generate a fresh one per activation *attempt*. This is used for idempotency/tracing, not as a credential. |
 | `activationToken` | Must be exactly 32 random bytes, Base64-encoded (so a 44-character string ending in `=`, decoding to exactly 32 bytes). Generate with a CSPRNG — e.g. Python `base64.b64encode(secrets.token_bytes(32)).decode()`, or .NET `Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))`. **This is a bearer credential you must persist** — see "What to do with the response" below. The server never returns it to you; it only ever echoes back what you already hold for future calls. |
@@ -202,7 +202,7 @@ All non-2xx responses are [RFC 9457 Problem Details](https://www.rfc-editor.org/
 (`application/problem+json`), with `title`, `detail`, and `status`. Do not blindly retry on 4xx.
 
 | Status | Meaning | Typical cause / agent action |
-|---|---|---|
+| --- | --- | --- |
 | `400 Bad Request` | Request shape/field validation failed. | `detail` names the exact problem (e.g. bad device scheme, malformed activation token). Fix the request; do not retry unchanged. |
 | `401 Unauthorized` | `"Deployment key is invalid."` / `"Deployment key has been revoked."` / `"Deployment key has expired."` | The key is wrong, was revoked by an operator, or passed its expiry. Do not retry — get a valid key from an operator. |
 | `409 Conflict` | License-state conflict — e.g. seat pool exhausted, this device already has an active activation elsewhere on this license, or a concurrent activation race was detected. | `detail` explains the specific conflict. A "retry to see the active device" conflict message means a concurrent request won the race; a fresh attempt with a new `requestId` may succeed or may confirm the existing activation, depending on the message. Seat-pool-exhausted is not retryable without operator action (e.g. deactivating another machine or raising the seat count). |

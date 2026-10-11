@@ -18,7 +18,7 @@ every client that speaks `repass-*-v1`. Those clients already **reject** licence
 v1 rules (§3.2, §4.4 of the brief):
 
 | v1 rule (client-enforced) | Consequence if violated |
-|---|---|
+| --- | --- |
 | `perpetual: false` is allowed only for `business` | Client rejects the licence |
 | `maxActivations` is required (≥ 1) for `business` and forbidden for every other edition | Client rejects the licence |
 | Device activation certificates exist only for `business` | Non-business clients never call with a device |

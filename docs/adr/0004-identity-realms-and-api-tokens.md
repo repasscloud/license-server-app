@@ -7,7 +7,7 @@
 There are four credential families, which never cross trust domains:
 
 | Credential | Realm | Storage | Peppers |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Customer session cookie `__Host-rp_cus` (Lax) | `/portal`, `/store` | `auth_sessions` HMAC, realm=customer | `AUTH_PEPPER` |
 | Admin session cookie `__Host-rp_adm` (Strict) | `/admin` | `auth_sessions` HMAC, realm=admin, `pending_mfa` → `active` | `AUTH_PEPPER` |
 | Admin API token `rpl_pat_…` / `rpl_svc_…` | `/api/admin/v1` only (bearer) | `admin_api_tokens.secret_hash` HMAC, lookup ID public | `API_TOKEN_PEPPER` |

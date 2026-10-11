@@ -45,7 +45,7 @@ Each leased row flows through:
 ## Events the app expects
 
 | Event(s) | Category | Effect |
-|---|---|---|
+| --- | --- | --- |
 | `checkout.session.completed`, `checkout.session.async_payment_succeeded` | Checkout | Creates/reuses `Customer`, `BillingContract`, `LicenseOrder`, and Stripe customer/checkout-session mappings; **issues a new license** via `LicenseStore.IssueForBillingAsync`; queues an activation email. Two paths, branched on whether the session has a `subscription`: subscription checkouts resolve edition/license type/seats from `StripePriceMapping` (keyed on Stripe price ID) and use `current_period_end` as the expiry, also creating a `StripeSubscriptionMapping`; one-time (`mode: "payment"`) checkouts resolve terms from the extended `StripeProductMapping` row (keyed on Stripe product ID — edition/license type/seats/updates-until/expires-at, manageable at **Settings → Stripe product mappings**) with no subscription mapping created. A Stripe custom field with key `poref` (if present) is read from `custom_fields[].text.value` and stored as `metadata.purchaseOrder` on the issued license. |
 | `invoice.paid` | Renewal | Extends license terms via `LicenseStore.ApplyBillingTermsAsync`; records a renewal order; queues a receipt email |
 | `invoice.payment_failed` | Payment failure | Puts the contract into a grace period (`BillingPolicyOptions.GracePeriodDays`, default 7); shortens license terms accordingly; queues a payment-failure email |
@@ -58,7 +58,7 @@ Each leased row flows through:
 ## Config / env vars
 
 | Setting | Source | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `Stripe:ApiKey` | `STRIPE_API_KEY` | |
 | `Stripe:WebhookSecret` | `STRIPE_WEBHOOK_SECRET` | Used for signature verification |
 | `Stripe:ApiVersion` | `appsettings.json` | Pinned to `2026-07-29.dahlia`, enforced at startup ([Program.cs:227-228](../src/LicenseServer/Program.cs)) |

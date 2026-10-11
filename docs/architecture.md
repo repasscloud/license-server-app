@@ -37,7 +37,7 @@ See the ADRs. In short:
 ## Data model (migrations/0001–0003)
 
 | Area | Tables |
-|---|---|
+| --- | --- |
 | Protocol and catalogue | `license_protocols`, `products`, `product_majors`, `product_releases`, `edition_definitions`, `product_edition_policies` |
 | Sellable catalogue | `offers` (single/bundle), `offer_entitlement_components`, `price_versions` (immutable amounts), `stripe_product_mappings`, `stripe_price_mappings` |
 | Parties | `customers` (individual/organisation), `portal_users`, `customer_members` (owner/admin/billing/member) |

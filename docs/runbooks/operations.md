@@ -9,7 +9,7 @@
 ## Stripe webhooks and reconciliation
 
 | Symptom | Action |
-|---|---|
+| --- | --- |
 | Event `failed` / `dead` | Read `last_error`, fix the cause (for example a missing mapping), then **Replay** (UI) or `POST /webhooks/stripe/events/{id}/replay`. Replays are idempotent. |
 | Customer paid, no licence | `POST /webhooks/reconcile {"kind":"checkouts"}`. This re-fetches open checkouts from Stripe and fulfils completed ones. |
 | Missed events (outage, misconfigured endpoint) | `POST /webhooks/reconcile {"kind":"backfill","sinceSeconds":<unix>}`. This pulls from the Stripe Events API (authenticated by our API key) and stores unseen events. |
@@ -22,7 +22,7 @@ The Stripe webhook signing secret rotates in the Stripe dashboard (roll secret),
 ## Email (MailerSend)
 
 | Status | Meaning | Action |
-|---|---|---|
+| --- | --- | --- |
 | `pending` / `failed` | Queued, or a retryable error with backoff | None. Retries continue automatically (up to 10 attempts). |
 | `dead` | Permanent error (4xx), the template is missing, or retries are exhausted | Fix the cause (for example verify the domain or the template), then **Retry**. |
 | `uncertain` | Timed out after sending, so MailerSend *may* have accepted it | Search MailerSend Activity for the recipient and time, then **Mark sent** or **Mark not sent**. Not-sent can then be retried. |
@@ -38,7 +38,7 @@ To rotate the MailerSend token: create a new scoped token, `wrangler secret put 
 ## Secret rotation summary
 
 | Secret | Effect of rotation | Procedure |
-|---|---|---|
+| --- | --- | --- |
 | `SIGNING_KEK_V<n>` | None for clients | See [signing-keys.md](signing-keys.md) (add V2, rewrap, remove V1) |
 | `APP_DATA_KEY_V<n>` | Encrypted TOTP secrets, pending key reveals and queued email payloads need the old version until re-encrypted | Add `APP_DATA_KEY_V2` and switch `APP_DATA_KEY_ACTIVE_VERSION`. Keep V1 until queued email drains and the 30-day reveals expire. Admins re-enrol TOTP, or a superadmin uses *Reset authenticator*, before V1 is removed. |
 | `MACHINE_PEPPER` | **Invalidates every activation key and client secret.** Clients would need re-activation. | Avoid. Rotate only after a confirmed leak, then mass-rotate activation keys (support) and accept that Business devices must re-activate. |
@@ -71,7 +71,7 @@ Review weekly: `api_token.ip_denied`, `admin.mfa_failed`, `machine.* outcome=fai
 Measured on the implementer's machine. Verify with production telemetry.
 
 | Resource | Free limit | This application |
-|---|---|---|
+| --- | --- | --- |
 | CPU per request | 10 ms | Warm: Business activation 0.84 ms p50 / 4.3 ms p95; renew 1.1 / 4.8 ms; admin API ~1 ms p50. **Cold first request per isolate: ~20 ms**, relying on Cloudflare's documented per-isolate tolerance for infrequent overruns (`docs/perf/cpu-latest.json`). |
 | CPU per cron | 10 ms | Bounded batches (3 jobs, 3 emails, 1 checkout reconcile per tick). Each job with signing is ≤ ~5 ms warm. |
 | Requests/day | 100,000 | Plus about 720 cron invocations/day |

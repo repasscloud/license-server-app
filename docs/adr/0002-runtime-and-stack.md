@@ -5,7 +5,7 @@
 ## Decision
 
 | Concern | Choice | Why |
-|---|---|---|
+| --- | --- | --- |
 | Runtime | One Cloudflare Worker, Free plan, `compatibility_date 2026-10-01`, flags `nodejs_compat` (postgres.js sockets) and `webcrypto_modern_algorithms` (native ML-DSA-65, available since 2026-09-28) | Mandated budget and runtime. One deployable unit; route groups are isolated logically. |
 | Router / UI | Hono and server-rendered `hono/jsx`, no client JavaScript, strict CSP (`script-src 'self'` with no scripts) | Small, Workers-native, typed. Accessible HTML forms using the PRG pattern; no SPA attack surface. |
 | Machine path | `/v1/*` dispatched to a minimal 3-route app; hand-written body validators | Avoids paying cold-isolate CPU for the full router and zod on the licensing hot path (measured). |

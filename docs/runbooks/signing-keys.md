@@ -5,7 +5,7 @@ See [ADR-0003](../adr/0003-signing-keys-and-trust-boundary.md) for the design an
 ## What lives where
 
 | Item | Location | Backed up by |
-|---|---|---|
+| --- | --- | --- |
 | Public keys and metadata | `signing_keys` (PostgreSQL) | Database backups |
 | Encrypted private keys (AES-256-GCM: ciphertext, nonce, tag, KEK version) | `signing_key_secrets` (PostgreSQL) | Database backups |
 | KEK `SIGNING_KEK_V<n>` (32 bytes) | Cloudflare Workers Secret (+ your offline escrow) | **Separately**, offline. Never with database dumps |

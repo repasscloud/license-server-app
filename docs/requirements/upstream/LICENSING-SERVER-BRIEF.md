@@ -54,7 +54,7 @@ endpoints in §5.
 ## 2. Fixed facts
 
 | Item | Value |
-|---|---|
+| --- | --- |
 | Editions (exact wire ids) | `community`, `education`, `business`, `enterprise` |
 | Signature algorithms (exact wire ids) | `Ed25519` (default), `ECDSA-P256-SHA256`, `ML-DSA-65` |
 | First product | `productId` = `cursedelete`, major version `2` (application releases 2.1.x onwards) |
@@ -70,7 +70,7 @@ endpoints in §5.
 ### 3.1 Keep these distinct [§13]
 
 | Concept | Meaning |
-|---|---|
+| --- | --- |
 | **Purchase** | A Stripe transaction (checkout, invoice, subscription). |
 | **Entitlement** | What a customer is owed: product + major version + edition + term + seats. Created from a verified purchase. |
 | **Licence** | A signed artifact for an entitlement. Re-issued (re-signed) on renewal while keeping its `licenseId`. |
@@ -84,7 +84,7 @@ component product* [§8.3]. There are never multi-product licences.
 ### 3.2 Per edition
 
 | | Community | Education | Business | Enterprise |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | Price | $0 registration (unregistered Community needs no licence at all) | Paid by default; free per product | Paid | Paid |
 | Term | perpetual | perpetual | **perpetual or subscription** | perpetual |
 | `maxActivations` claim | absent | absent | **required, ≥ 1** | absent |
@@ -148,7 +148,7 @@ certificate.
 ### 4.3 Algorithms
 
 | Algorithm | Signing | Signature bytes | Public key as published to apps |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `Ed25519` | RFC 8032 **pure** Ed25519 (not Ed25519ph/ctx) | 64 | 32-byte raw key |
 | `ECDSA-P256-SHA256` | ECDSA over P-256, SHA-256 of the signed bytes | 64, **IEEE P1363 `r‖s` (not DER)**, each half left-padded to 32 bytes | SEC1 point, compressed (33) or uncompressed (65) |
 | `ML-DSA-65` | FIPS 204 **pure** ML-DSA (not HashML-DSA), **empty context string** | 3309 | 1952-byte encoded key |
@@ -181,7 +181,7 @@ environment. If you advertise FIPS, use one [§15.3].
 ```
 
 | Field | Required | Rule |
-|---|---|---|
+| --- | --- | --- |
 | `schemaVersion` | yes | `1`. Clients report any other number as unsupported. |
 | `licenseId` | yes | Stable for the life of the entitlement: renewals keep it. Activation certificates reference it. |
 | `customerId` | yes | Your stable customer reference. Not the Stripe id, not an email address. |
@@ -336,7 +336,7 @@ Every non-2xx response has this body:
 ```
 
 | HTTP | `error` | When | CurseDelete client does |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 400 | `invalid_request` | Malformed body / ids | Reports; changes nothing |
 | 401 | `unauthorized` | Client secret or device mismatch | Reports; keeps local activation |
 | 403 | `revoked` | Entitlement revoked | **Records the licence as revoked locally** (on renew) and stops using it |

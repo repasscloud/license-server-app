@@ -5,7 +5,7 @@ Everything here is **data**, created through the admin portal or the admin API, 
 ## Concepts
 
 | Object | What it is | Example |
-|---|---|---|
+| --- | --- | --- |
 | Product | Immutable wire `productId` (slug) plus a display name | `cursedelete` |
 | Major | One major version, bound to **one wire protocol** | `cursedelete` v2 → `repass-v1` |
 | Release | An application release of the major. One shipped release is the **minimum supported** | `2.1.0` (minimum) |
@@ -34,7 +34,7 @@ Changing a price means creating a new price version and activating it. The old v
 ## Protocol capabilities (what `repass-v1` clients accept)
 
 | Edition label | Terms allowed | Activation model | Seats | Certificate lifetime |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `community` | perpetual only | none (provisioning) | — | — |
 | `education` | perpetual only | none | — | — |
 | `enterprise` | perpetual only | none | — | — |
