@@ -86,7 +86,8 @@ export const securityHeaders: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
   const h = c.res.headers;
   h.set('X-Content-Type-Options', 'nosniff');
-  h.set('Referrer-Policy', 'no-referrer');
+  // same-origin, not no-referrer: no-referrer makes browsers send `Origin: null` on our own form posts.
+  h.set('Referrer-Policy', 'same-origin');
   h.set('X-Frame-Options', 'DENY');
   h.set('Cross-Origin-Opener-Policy', 'same-origin');
   h.set('Cross-Origin-Resource-Policy', 'same-origin');

@@ -508,6 +508,14 @@ describe('customer portal and realm separation', () => {
     // Cross-site form posts are rejected.
     const xs = await portal.request(`/portal/licenses/${ids.licenseId}/rotate-key`, { method: 'POST', body: 'x=1', headers: { origin: 'https://evil.example', 'content-type': 'application/x-www-form-urlencoded' } });
     expect(xs.status).toBe(403);
+    // Real browsers may send `Origin: null` on same-origin posts; Sec-Fetch-Site decides then.
+    const anon = new Client(env);
+    const form = { 'content-type': 'application/x-www-form-urlencoded', origin: 'null' };
+    const nullSame = await anon.request('/portal/login', { method: 'POST', body: 'email=null-origin%40example.org', headers: { ...form, 'sec-fetch-site': 'same-origin' } });
+    expect(nullSame.status).toBe(200);
+    const nullCross = await anon.request('/portal/login', { method: 'POST', body: 'email=null-origin%40example.org', headers: { ...form, 'sec-fetch-site': 'cross-site' } });
+    expect(nullCross.status).toBe(403);
+    expect((await anon.request('/portal/login')).headers.get('referrer-policy')).toBe('same-origin');
     // Missing CSRF token is rejected even from the same origin.
     const noCsrf = await portal.request(`/portal/licenses/${ids.licenseId}/rotate-key`, { method: 'POST', form: { x: '1' } });
     expect(noCsrf.status).toBe(403);

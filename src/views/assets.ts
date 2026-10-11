@@ -11,7 +11,7 @@ main{max-width:1180px;margin:0 auto;padding:16px}h1{font-size:1.45rem;margin:.2e
 .table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:.93em}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:600}
 code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em;background:var(--code);padding:1px 4px;border-radius:4px;word-break:break-all}
 form.inline{display:inline}label{display:block;font-weight:600;margin:.5em 0 .2em}input,select,textarea{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;width:100%;max-width:520px}
-input[type=checkbox]{width:auto}textarea{min-height:120px;max-width:100%}.row{display:flex;gap:12px;flex-wrap:wrap}.row>div{flex:1 1 200px}
+input[type=checkbox]{width:auto}:is(input,select,textarea)+button{margin-left:8px}textarea{min-height:120px;max-width:100%}.row{display:flex;gap:12px;flex-wrap:wrap}.row>div{flex:1 1 200px}
 button,.button{display:inline-block;font:inherit;border:1px solid var(--accent);background:var(--accent);color:var(--accent-fg);border-radius:6px;padding:6px 12px;cursor:pointer;text-decoration:none;margin:4px 4px 4px 0}
 button.secondary,.button.secondary{background:transparent;color:var(--accent)}button.danger{background:var(--danger);border-color:var(--danger);color:#fff}
 .flash{padding:10px 12px;border-radius:6px;margin:0 0 12px;border:1px solid var(--line)}.flash.ok{border-color:var(--ok)}.flash.err{border-color:var(--danger)}

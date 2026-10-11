@@ -30,8 +30,11 @@ export function clearSessionCookie(c: Ctx, realm: Realm) {
 export function sameOrigin(c: Ctx): boolean {
   const origin = c.req.header('origin');
   const expected = c.get('deps').config.publicBaseUrl.origin;
-  if (origin) return origin === expected;
   const site = c.req.header('sec-fetch-site');
+  // Browsers send `Origin: null` when a referrer policy or privacy setting strips it; fall back to
+  // Sec-Fetch-Site, a forbidden header that pages cannot forge.
+  if (origin && origin !== 'null') return origin === expected;
+  if (origin === 'null') return site === 'same-origin';
   return site === undefined || site === 'same-origin' || site === 'none';
 }
 
