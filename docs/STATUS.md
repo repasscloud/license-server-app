@@ -5,7 +5,7 @@ This document is **evidence-based**. "Done" means implemented **and** exercised 
 ## Verification run (this commit)
 
 | Check | Result |
-|---|---|
+| --- | --- |
 | `npm run secrets:scan` | clean (119 tracked files) |
 | `npm run lint` | clean |
 | `npm run typecheck` (Worker program + Node program) | clean |
@@ -25,7 +25,7 @@ Reproduce with `npm run secrets:scan && npm run lint && npm run typecheck && npm
 `docs/perf/cpu-latest.json` (Apple M2 Pro, Node 26, the same request code path, CPU via `process.cpuUsage`; database wait excluded, as on Workers):
 
 | Path | Warm p50 | Warm p95 | First request in a fresh isolate |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `POST /v1/activations` Business, new device (licence + certificate; Ed25519 + ML-DSA-65; seat transaction) | 0.84 ms | 4.3 ms | **~21 ms** |
 | `POST /v1/activations` Enterprise provisioning | 0.63 ms | 1.8 ms | 0.6 ms |
 | `POST /v1/licenses/{id}/renew` | 1.1 ms | 4.8 ms | 3.4 ms |
@@ -40,7 +40,7 @@ Reproduce with `npm run secrets:scan && npm run lint && npm run typecheck && npm
 ## Definition of Done
 
 | Item | Status |
-|---|---|
+| --- | --- |
 | Old .NET implementation replaced by a native TypeScript Worker | **Done.** Legacy removed from the tree (history `a8e2602`); rationale archived. |
 | Runs under Workers Free constraints, or a disclosed blocker | **Done with disclosed risk:** warm well under 10 ms; cold ~20 ms per new isolate (see above). |
 | Only public domain `license-server.repasscloud.com`; preview/version exposure addressed | **Configured** (`custom_domain`, `workers_dev:false`, `preview_urls:false` in every environment). **Not verified:** requires the first real deploy and the dashboard checklist in the deployment runbook. |

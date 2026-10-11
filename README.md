@@ -12,7 +12,7 @@ RePassCloud's licensing and commerce platform. It is a multi-product, multi-vers
 ## What it serves
 
 | Path | What | Authentication |
-|---|---|---|
+| --- | --- | --- |
 | `POST /v1/activations`, `POST /v1/licenses/{id}/renew`, `POST /v1/activations/{id}/deactivate` | Binding machine API (brief §5) | Activation key / per-activation client secret |
 | `/api/admin/v1/*` | Scriptable admin REST API ([OpenAPI 3.1](docs/api/openapi.json)) | Bearer PAT `rpl_pat_…` or service token `rpl_svc_…` only. No cookies, no browser |
 | `/admin/*` | Administrator portal | Email link + mandatory TOTP; step-up for high-risk actions |
@@ -55,7 +55,7 @@ Locally, mail is **captured and printed to the dev console, not delivered** (`MA
 ## Commands
 
 | Command | Purpose |
-|---|---|
+| --- | --- |
 | `npm run dev` | Worker in workerd (`wrangler dev`; `.env` auto-loading disabled) |
 | `npm run typecheck` | Generate runtime types, then typecheck the Worker and Node programs |
 | `npm run lint` | ESLint |
