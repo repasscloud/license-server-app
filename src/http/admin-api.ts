@@ -132,6 +132,7 @@ adminApi.get('/offers', async (c) => (need(c, 'products:read'), c.json(list(awai
 adminApi.post('/offers', mutation(201, (c, b) => catalogue.createOffer(c.get('deps').sql, actor(c), b)));
 adminApi.get('/offers/:id', async (c) => (need(c, 'products:read'), c.json(await catalogue.getOffer(c.get('deps').sql, c.req.param('id')))));
 adminApi.patch('/offers/:id', mutation(200, (c, b) => catalogue.updateOffer(c.get('deps').sql, actor(c), c.req.param('id')!, b)));
+adminApi.put('/offers/:id/stripe-product', mutation(200, (c, b) => stripeSync.linkStripeProduct(c.get('deps').sql, c.get('deps').stripe, actor(c), c.req.param('id')!, b)));
 adminApi.post('/offers/:id/status', mutation(200, (c, b) => catalogue.setOfferStatus(c.get('deps').sql, actor(c), c.req.param('id')!, z.enum(['active', 'archived', 'draft']).parse(b.status))));
 adminApi.get('/offers/:id/prices', async (c) => (need(c, 'prices:read'), c.json({ data: await catalogue.listPriceHistory(c.get('deps').sql, c.req.param('id')) })));
 adminApi.post('/prices', mutation(201, (c, b) => catalogue.createPriceVersion(c.get('deps').sql, actor(c), b)));

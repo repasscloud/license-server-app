@@ -178,6 +178,39 @@ describe('catalogue onboarding through the admin API (no redeploy, data only)', 
     expect(early.status).toBe(412);
   });
 
+  it('links each offer to a product created in Stripe; never creates or renames Stripe products', async () => {
+    const link = (offer: string, stripeProductId: string) => api('PUT', `/offers/${offer}/stripe-product`, { stripeProductId });
+    expect((await link(ids['offer_cd2-enterprise']!, 'price_123')).status).toBe(422);
+    const unknown = await link(ids['offer_cd2-enterprise']!, 'prod_doesnotexist');
+    expect(unknown.status).toBe(422);
+    expect(unknown.body.error.message).toMatch(/does not exist in this Stripe account \(test mode\)/);
+    const archived = stripe.createProductDirect('Old product', { active: false });
+    expect((await link(ids['offer_cd2-enterprise']!, archived)).body.error.message).toMatch(/archived in Stripe/);
+    for (const sku of ['cd2-business-annual', 'cd2-community-reg', 'cd2-enterprise', 'suite-enterprise']) {
+      ids[`prod_${sku}`] = stripe.createProductDirect(`CurseDelete 2 ${sku}`);
+      const r = await link(sku, ids[`prod_${sku}`]!); // by SKU
+      expect(r.status).toBe(200);
+      expect(r.body).toMatchObject({ offerId: ids[`offer_${sku}`], stripeProductId: ids[`prod_${sku}`], stripeProductName: `CurseDelete 2 ${sku}` });
+    }
+    // One product per offer.
+    const taken = await link(ids['offer_cd2-enterprise']!, ids['prod_cd2-business-annual']!);
+    expect(taken.status).toBe(409);
+    expect(taken.body.error.message).toMatch(/already linked to offer cd2-business-annual/);
+    // Only repass_* metadata is written; Stripe keeps the name, description and image.
+    const p = stripe.products.get(ids['prod_cd2-enterprise']!)!;
+    expect(p).toMatchObject({ name: 'CurseDelete 2 cd2-enterprise', description: 'CurseDelete 2 cd2-enterprise description', active: true,
+      metadata: { repass_offer_id: ids['offer_cd2-enterprise'], repass_sku: 'cd2-enterprise' } });
+    expect((p.images as string[])[0]).toMatch(/^https:\/\/img\.example\.test\//);
+    // Renaming the offer or verifying the product never renames it in Stripe.
+    await ok('PATCH', `/offers/${ids['offer_cd2-enterprise']}`, { name: 'Enterprise perpetual (renamed)', description: 'db text' });
+    expect((await ok('POST', '/stripe/sync', { offerId: ids['offer_cd2-enterprise'], wait: true })).stripeProductId).toBe(ids['prod_cd2-enterprise']);
+    expect(stripe.products.get(ids['prod_cd2-enterprise']!)).toMatchObject({ name: 'CurseDelete 2 cd2-enterprise', description: 'CurseDelete 2 cd2-enterprise description' });
+    await ok('PATCH', `/offers/${ids['offer_cd2-enterprise']}`, { name: 'Enterprise perpetual' });
+    const audits = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM audit_events WHERE action = 'stripe.product_linked'`;
+    expect(audits[0]!.n).toBe(4);
+    expect(stripe.requests.filter((r) => r.method === 'POST' && r.path === '/v1/products').length).toBe(0);
+  });
+
   it('sets prices in every store currency in the database (no Stripe prices), then activates offers', async () => {
     // Zero price is refused for paid offers; unsupported currencies are refused.
     expect((await api('POST', '/prices', { offerId: ids['offer_cd2-enterprise'], currency: 'aud', unitAmount: 0 })).status).toBe(422);
@@ -213,8 +246,10 @@ describe('server-created checkout and verified fulfilment', () => {
     expect(sent.length).toBe(1);
     const p = sent[0]!.params as any;
     // The amount is sent inline from the database price version, against the offer's Stripe product.
-    const [pm] = await sql<{ stripe_product_id: string }[]>`SELECT stripe_product_id FROM stripe_product_mappings WHERE offer_id = ${ids['offer_cd2-business-annual']!}`;
-    expect(p.line_items[0]).toEqual({ price_data: { currency: 'aud', unit_amount: '4900', product: pm!.stripe_product_id, recurring: { interval: 'year', interval_count: '1' } }, quantity: '3' });
+    expect(p.line_items[0]).toEqual({ price_data: { currency: 'aud', unit_amount: '4900', product: ids['prod_cd2-business-annual'], recurring: { interval: 'year', interval_count: '1' } }, quantity: '3' });
+    const [chk] = await sql<{ stripe_product_id: string }[]>`SELECT stripe_product_id FROM checkouts WHERE stripe_checkout_session_id = ${sid}`;
+    expect(chk!.stripe_product_id).toBe(ids['prod_cd2-business-annual']);
+    expect(stripe.requests.filter((r) => r.method === 'POST' && r.path === '/v1/products').length).toBe(0);
     expect(p.mode).toBe('subscription');
     expect(p.customer).toMatch(/^cus_/);
     expect(p.customer_email).toBeUndefined();
@@ -231,6 +266,10 @@ describe('server-created checkout and verified fulfilment', () => {
   });
 
   it('rejects bad signatures, stores verified events once, fulfils exactly once', async () => {
+    // Relinking the offer while this session is open does not quarantine it: the checkout
+    // recorded the product it was opened against.
+    const replacement = stripe.createProductDirect('CurseDelete 2 Business (new artwork)');
+    await ok('PUT', `/offers/${ids['offer_cd2-business-annual']}/stripe-product`, { stripeProductId: replacement });
     stripe.completeSession(ids.bizSession!, { name: 'Ann Admin', businessName: 'Example Org Pty Ltd', email: 'it@example.org' });
     const bad = await webhook('checkout.session.completed', stripe.publicSession(ids.bizSession!), { tamper: true });
     expect(bad.res.status).toBe(400);
@@ -650,6 +689,11 @@ describe('store: one customer per email, flat tax, prices registered from Stripe
     expect(set.prices.find((p: any) => p.currency === 'aud')).toMatchObject({ unit_amount: 10000, tax_rate_bps: 1000, tax_label: 'GST', status: 'active' });
     // Tax rate and label go together.
     expect((await api('POST', '/prices', { offerId: ids.offer_edu, currency: 'aud', unitAmount: 1, taxRatePercent: 10 })).status).toBe(422);
+    // Fully priced but not linked to a Stripe product: not activatable, not sellable.
+    const unlinked = await api('POST', `/offers/${ids.offer_edu}/status`, { status: 'active' });
+    expect(unlinked.status).toBe(412);
+    expect(unlinked.body.error.message).toMatch(/Link the offer to its Stripe product/);
+    await ok('PUT', `/offers/${ids.offer_edu}/stripe-product`, { stripeProductId: stripe.createProductDirect('CurseDelete 2 Education') });
     await ok('POST', `/offers/${ids.offer_edu}/status`, { status: 'active' });
   });
 
@@ -749,5 +793,13 @@ describe('store: one customer per email, flat tax, prices registered from Stripe
     expect(sessionParams().customer).toBe('cus_from_other_project');
     expect(stripe.requests.some((x) => x.method === 'POST' && x.path === '/v1/customers' && x.params.email === 'shared@buyer.example')).toBe(false);
     expect((await custRows('shared@buyer.example'))[0]!.stripe_customer_id).toBe('cus_from_other_project');
+  });
+
+  it('never created a Stripe product across every checkout in this run', async () => {
+    expect(stripe.requests.filter((r) => r.path === '/v1/checkout/sessions').length).toBeGreaterThan(5);
+    expect(stripe.requests.filter((r) => r.method === 'POST' && r.path === '/v1/products').length).toBe(0);
+    // Every Checkout line item referenced a product linked by the owner.
+    const linked = new Set((await sql<{ stripe_product_id: string }[]>`SELECT stripe_product_id FROM checkouts WHERE stripe_product_id IS NOT NULL`).map((r) => r.stripe_product_id));
+    for (const r of stripe.requests.filter((x) => x.path === '/v1/checkout/sessions')) expect(linked.has((r.params as any).line_items[0].price_data.product)).toBe(true);
   });
 });

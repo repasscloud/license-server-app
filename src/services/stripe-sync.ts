@@ -1,44 +1,93 @@
 // Stripe objects the store needs. Prices are NOT Stripe objects: they live only in PostgreSQL and
-// Checkout sends the amount inline (price_data). Stripe holds one Product per offer (for
-// reporting), one Customer per email, and one Tax Rate per flat rate/label.
+// Checkout sends the amount inline (price_data). Each offer is linked to one Stripe Product that
+// is created and managed in Stripe (name, description and images shown at Checkout): the server
+// never creates or renames products, it only verifies them and tags them with repass_* metadata.
+// Stripe also holds one Customer per email and one Tax Rate per flat rate/label.
 
 import type { Db, Sql } from '../db/client.ts';
 import { StripeClient, StripeError } from '../integrations/stripe.ts';
-import { AppError, notFound } from '../lib/errors.ts';
+import { AppError, conflict, invalid, notFound } from '../lib/errors.ts';
 import { requirePermission, systemActor, type Actor } from './actor.ts';
 import { audit } from './audit.ts';
 import { enqueueJob } from './jobs.ts';
 
 interface StripeProduct { id: string; name: string; active: boolean; metadata?: Record<string, string> }
 
-export async function syncOffer(sql: Sql, stripe: StripeClient, offerId: string, actor: Actor = systemActor('stripe-sync')): Promise<string> {
-  const [o] = await sql<{ id: string; sku: string; name: string; description: string; status: string; stripe_product_id: string | null; synced_name: string | null }[]>`
-    SELECT o.id, o.sku, o.name, o.description, o.status, m.stripe_product_id, m.synced_name
-    FROM offers o JOIN stripe_product_mappings m ON m.offer_id = o.id WHERE o.id = ${offerId}`;
-  if (!o) throw notFound('Offer');
+const PRODUCT_ID = /^prod_[A-Za-z0-9]{1,250}$/;
+
+/** A product checkouts may reference: it exists in this Stripe account and is active. */
+async function fetchSellableProduct(stripe: StripeClient, productId: string): Promise<StripeProduct> {
+  let product: StripeProduct;
   try {
-    let product: StripeProduct;
-    const desired = { name: o.name, description: o.description || undefined, active: o.status !== 'archived', metadata: { repass_offer_id: o.id, repass_sku: o.sku } };
-    if (o.stripe_product_id) {
-      product = await stripe.request<StripeProduct>('POST', `/v1/products/${o.stripe_product_id}`, desired, `repass-product-update-${o.id}-${hashName(o.name, o.status)}`);
-    } else {
-      product = await stripe.request<StripeProduct>('POST', '/v1/products', desired, `repass-product-${o.id}`);
-    }
-    await sql`UPDATE stripe_product_mappings SET stripe_product_id = ${product.id}, sync_state = 'synced', synced_name = ${o.name}, last_error = NULL,
-              attempts = attempts + 1, last_synced_at = now(), updated_at = now() WHERE offer_id = ${offerId}`;
-    await audit(sql, actor, { action: 'stripe.product_synced', resourceType: 'offer', resourceId: offerId, detail: { stripeProductId: product.id } });
-    return product.id;
+    product = await stripe.request<StripeProduct>('GET', `/v1/products/${productId}`);
   } catch (e) {
-    await sql`UPDATE stripe_product_mappings SET sync_state = CASE WHEN stripe_product_id IS NULL THEN 'failed' ELSE sync_state END,
-              last_error = ${errorText(e)}, attempts = attempts + 1, updated_at = now() WHERE offer_id = ${offerId}`;
+    if (e instanceof StripeError && e.status === 404) {
+      throw invalid(`Stripe product ${productId} does not exist in this Stripe account (${stripe.livemode ? 'live' : 'test'} mode)`);
+    }
     throw e;
   }
+  if (!product.active) throw invalid(`Stripe product ${productId} is archived in Stripe; reactivate it or link another product`);
+  return product;
 }
 
-function hashName(name: string, status: string): string {
-  let h = 2166136261;
-  for (const ch of `${name}|${status}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
-  return h.toString(36);
+/** Tag the product for Stripe reporting. Never writes its name, description, images or status. */
+async function tagProduct(stripe: StripeClient, product: StripeProduct, offer: { id: string; sku: string }): Promise<void> {
+  if (product.metadata?.repass_offer_id === offer.id && product.metadata?.repass_sku === offer.sku) return;
+  await stripe.request('POST', `/v1/products/${product.id}`, { metadata: { repass_offer_id: offer.id, repass_sku: offer.sku } },
+    `repass-product-tag-${offer.id}-${product.id}-${Date.now()}`);
+}
+
+/**
+ * Link an offer to an existing Stripe Product (prod_…). The product must exist in this Stripe
+ * account and be active, and belongs to one offer only. Relinking is allowed and audited:
+ * checkouts already open keep the product they were created with.
+ */
+export async function linkStripeProduct(sql: Sql, stripe: StripeClient, actor: Actor, offerIdOrSku: string, raw: unknown) {
+  requirePermission(actor, 'products:write');
+  const given = typeof raw === 'object' && raw !== null ? (raw as { stripeProductId?: unknown }).stripeProductId : undefined;
+  const productId = typeof given === 'string' ? given.trim() : '';
+  if (!PRODUCT_ID.test(productId)) throw invalid('stripeProductId must be a Stripe product id (prod_…)');
+  const [o] = await sql<{ id: string; sku: string; stripe_product_id: string | null }[]>`
+    SELECT o.id, o.sku, m.stripe_product_id FROM offers o JOIN stripe_product_mappings m ON m.offer_id = o.id
+    WHERE o.id = ${offerIdOrSku} OR o.sku = ${offerIdOrSku}`;
+  if (!o) throw notFound('Offer');
+  const [other] = await sql<{ sku: string }[]>`
+    SELECT o.sku FROM stripe_product_mappings m JOIN offers o ON o.id = m.offer_id WHERE m.stripe_product_id = ${productId} AND m.offer_id <> ${o.id}`;
+  if (other) throw conflict(`Stripe product ${productId} is already linked to offer ${other.sku}`);
+  const product = await fetchSellableProduct(stripe, productId);
+  await tagProduct(stripe, product, o);
+  await sql`UPDATE stripe_product_mappings SET stripe_product_id = ${productId}, sync_state = 'synced', synced_name = ${product.name}, last_error = NULL,
+            attempts = attempts + 1, last_synced_at = now(), last_checked_at = now(), updated_at = now() WHERE offer_id = ${o.id}`
+    .catch((e) => {
+      throw conflict(`Stripe product ${productId} is already linked to another offer: ${errorText(e)}`);
+    });
+  await audit(sql, actor, { action: 'stripe.product_linked', resourceType: 'offer', resourceId: o.id, detail: { stripeProductId: productId, previousStripeProductId: o.stripe_product_id } });
+  return { offerId: o.id, sku: o.sku, stripeProductId: productId, stripeProductName: product.name };
+}
+
+/**
+ * Verify the offer's linked Stripe Product still exists and is active, and re-apply the repass_*
+ * metadata. Never creates a product. A missing or archived product marks the mapping failed,
+ * which blocks activation until it is fixed or relinked.
+ */
+export async function syncOffer(sql: Sql, stripe: StripeClient, offerId: string, actor: Actor = systemActor('stripe-sync')): Promise<string> {
+  const [o] = await sql<{ id: string; sku: string; stripe_product_id: string | null }[]>`
+    SELECT o.id, o.sku, m.stripe_product_id FROM offers o JOIN stripe_product_mappings m ON m.offer_id = o.id WHERE o.id = ${offerId} OR o.sku = ${offerId}`;
+  if (!o) throw notFound('Offer');
+  if (!o.stripe_product_id) throw new AppError('precondition_failed', `Offer ${o.sku} has no linked Stripe product; link one (prod_…) first`);
+  try {
+    const product = await fetchSellableProduct(stripe, o.stripe_product_id);
+    await tagProduct(stripe, product, o);
+    await sql`UPDATE stripe_product_mappings SET sync_state = 'synced', synced_name = ${product.name}, last_error = NULL,
+              attempts = attempts + 1, last_synced_at = now(), last_checked_at = now(), updated_at = now() WHERE offer_id = ${o.id}`;
+    await audit(sql, actor, { action: 'stripe.product_verified', resourceType: 'offer', resourceId: o.id, detail: { stripeProductId: product.id } });
+    return product.id;
+  } catch (e) {
+    // Missing/archived product: failed. Transient provider errors keep the current state.
+    await sql`UPDATE stripe_product_mappings SET sync_state = CASE WHEN ${e instanceof AppError}::boolean THEN 'failed' ELSE sync_state END,
+              last_error = ${errorText(e)}, attempts = attempts + 1, last_checked_at = now(), updated_at = now() WHERE offer_id = ${o.id}`;
+    throw e;
+  }
 }
 
 function errorText(e: unknown): string {
@@ -51,10 +100,11 @@ export async function requestSync(sql: Sql, actor: Actor, opts: { offerId: strin
   await audit(sql, actor, { action: 'stripe.sync_requested', detail: opts });
 }
 
-/** The offer's Stripe Product (created on first need). Checkout line items reference it. */
-export async function ensureStripeProduct(sql: Sql, stripe: StripeClient, offerId: string): Promise<string> {
-  const [m] = await sql<{ stripe_product_id: string | null }[]>`SELECT stripe_product_id FROM stripe_product_mappings WHERE offer_id = ${offerId}`;
-  return m?.stripe_product_id ?? syncOffer(sql, stripe, offerId);
+/** The offer's linked Stripe Product for a Checkout line item. Never creates one. */
+export async function linkedStripeProduct(db: Db, offerId: string): Promise<string> {
+  const [m] = await db<{ stripe_product_id: string | null }[]>`SELECT stripe_product_id FROM stripe_product_mappings WHERE offer_id = ${offerId}`;
+  if (!m?.stripe_product_id) throw new AppError('precondition_failed', 'This offer is not linked to a Stripe product and cannot be sold');
+  return m.stripe_product_id;
 }
 
 export async function listMappings(db: Db) {

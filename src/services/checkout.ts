@@ -15,7 +15,7 @@ import type { Actor } from './actor.ts';
 import { audit } from './audit.ts';
 import { loadPolicyRows, resolvePurchasable } from './catalogue.ts';
 import { normaliseEmail, resolveStoreCustomer } from './customers.ts';
-import { ensureStripeCustomer, ensureStripeProduct, ensureStripeTaxRate } from './stripe-sync.ts';
+import { ensureStripeCustomer, ensureStripeTaxRate, linkedStripeProduct } from './stripe-sync.ts';
 
 export const CreateCheckoutInput = z.object({
   sku: z.string().regex(/^[A-Za-z0-9_.-]{1,100}$/),
@@ -146,7 +146,7 @@ async function startStripeSession(sql: Sql, config: Config, stripe: StripeClient
   let stripeCustomerId: string | null = null;
   let stripeProductId: string;
   try {
-    stripeProductId = await ensureStripeProduct(sql, stripe, c.snapshot.offer.id);
+    stripeProductId = await linkedStripeProduct(sql, c.snapshot.offer.id);
     if (p.taxRateBps && p.taxLabel) taxRateId = await ensureStripeTaxRate(sql, stripe, p.taxLabel, p.taxRateBps);
     if (c.customer_id) stripeCustomerId = await ensureStripeCustomer(sql, stripe, c.customer_id);
   } catch (e) {
@@ -190,7 +190,7 @@ async function startStripeSession(sql: Sql, config: Config, stripe: StripeClient
   try {
     const session = await stripe.request<{ id: string; url: string }>('POST', '/v1/checkout/sessions', params as never, `repass-checkout-${c.id}`);
     const [u] = await sql<{ id: string; status: string; stripe_checkout_url: string | null; quantity: number; currency: string; expected_subtotal: number; snapshot: CheckoutSnapshot }[]>`
-      UPDATE checkouts SET stripe_checkout_session_id = ${session.id}, stripe_checkout_url = ${session.url}, status = 'open', failure_reason = NULL
+      UPDATE checkouts SET stripe_checkout_session_id = ${session.id}, stripe_checkout_url = ${session.url}, stripe_product_id = ${stripeProductId}, status = 'open', failure_reason = NULL
       WHERE id = ${c.id} AND status IN ('creating', 'failed') RETURNING id, status, stripe_checkout_url, quantity, currency, expected_subtotal, snapshot`;
     if (!u) {
       const [cur] = await sql<{ id: string; status: string; stripe_checkout_url: string | null; quantity: number; currency: string; expected_subtotal: number; snapshot: CheckoutSnapshot }[]>`SELECT id, status, stripe_checkout_url, quantity, currency, expected_subtotal, snapshot FROM checkouts WHERE id = ${c.id}`;

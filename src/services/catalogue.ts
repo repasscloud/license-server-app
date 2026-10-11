@@ -11,7 +11,6 @@ import { newId } from '../lib/ids.ts';
 import { compareSemver } from '../lib/semver.ts';
 import { requirePermission, type Actor } from './actor.ts';
 import { audit } from './audit.ts';
-import { enqueueJob } from './jobs.ts';
 
 const slug = z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,63}$/, 'lower-case letters, digits, _ . - (max 64)');
 const text = (max: number) => z.string().trim().max(max);
@@ -398,8 +397,7 @@ export async function updateOffer(sql: Sql, actor: Actor, id: string, raw: unkno
       billing_address_collection = coalesce(${input.billingAddressCollection ?? null}, billing_address_collection),
       tax_id_collection = coalesce(${input.taxIdCollection ?? null}, tax_id_collection)
       WHERE id = ${id}`;
-    if (input.name) await tx`UPDATE stripe_product_mappings SET sync_state = 'pending' WHERE offer_id = ${id} AND stripe_product_id IS NOT NULL`;
-    if (input.name) await enqueueJob(tx, 'stripe.sync_offer', `stripe.sync_offer:${id}:${Date.now()}`, { offerId: id });
+    // The linked Stripe product is managed in Stripe: renaming the offer never renames it.
     await audit(tx, actor, { action: 'offer.updated', resourceType: 'offer', resourceId: id, detail: { changes: input } });
     return getOffer(tx, id);
   });
@@ -407,8 +405,8 @@ export async function updateOffer(sql: Sql, actor: Actor, id: string, raw: unkno
 
 /**
  * Activate (publish) or archive an offer. Activation requires a valid protocol combination,
- * active product/majors, and at least one active price whose Stripe mapping is synced:
- * an offer with a broken Stripe mapping is never purchasable.
+ * active product/majors, an active price in every store currency, and a linked, verified Stripe
+ * product: an offer without one is never purchasable (the server never creates products).
  */
 export async function setOfferStatus(sql: Sql, actor: Actor, id: string, status: 'active' | 'archived' | 'draft') {
   requirePermission(actor, 'products:write');
@@ -425,6 +423,10 @@ export async function setOfferStatus(sql: Sql, actor: Actor, id: string, status:
       for (const i of inactive) problems.push({ rule: 'offer.product_inactive', message: `${i.slug} v${i.major_version} is not active (product ${i.ps}, major ${i.ms})` });
       const missing = await missingCurrencies(tx, id);
       if (missing.length) problems.push({ rule: 'offer.price', message: `Offer needs an active price in every store currency; missing ${missing.join(', ').toUpperCase()}` });
+      const [pm] = await tx<{ stripe_product_id: string | null; sync_state: string; last_error: string | null }[]>`
+        SELECT stripe_product_id, sync_state, last_error FROM stripe_product_mappings WHERE offer_id = ${id}`;
+      if (!pm?.stripe_product_id) problems.push({ rule: 'offer.stripe_product', message: 'Link the offer to its Stripe product (prod_…) before activating' });
+      else if (pm.sync_state !== 'synced') problems.push({ rule: 'offer.stripe_product', message: `Stripe product ${pm.stripe_product_id} is not verified (${pm.sync_state}${pm.last_error ? `: ${pm.last_error}` : ''}); verify or relink it` });
       if (problems.length) throw new AppError('precondition_failed', problems.map((p) => p.message).join('; '), { problems });
     }
     await tx`UPDATE offers SET status = ${status} WHERE id = ${id}`;
