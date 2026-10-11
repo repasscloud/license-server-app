@@ -23,7 +23,7 @@ import * as licensing from '../services/licensing.ts';
 import * as keys from '../services/signing-keys.ts';
 import * as stripeSync from '../services/stripe-sync.ts';
 import { Badge, Csrf, fmt, Layout, money } from '../views/layout.tsx';
-import { type AppEnv, type Ctx, logError, toAppError } from './context.ts';
+import { type AppEnv, type Ctx, kickEmailDispatch, logError, toAppError } from './context.ts';
 import { bool, clearSessionCookie, csrfGuard, formData, loadSession, numOrNull, setSessionCookie, strOrNull, type RealmSession } from './session.ts';
 
 export const adminUi = new Hono<AppEnv>();
@@ -98,6 +98,7 @@ adminUi.post('/login', async (c) => {
   const { sql, config } = c.get('deps');
   try {
     await requestLogin(sql, config, 'admin', f.email ?? '', c.get('ipHash'), c.req.query('next'));
+    kickEmailDispatch(c);
   } catch (e) {
     logError(c, e);
   }

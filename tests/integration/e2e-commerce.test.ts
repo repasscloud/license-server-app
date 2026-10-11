@@ -475,11 +475,21 @@ describe('customer portal and realm separation', () => {
     portal = new Client(env);
     const csrf = await portal.csrfFrom('/portal/login');
     await portal.request('/portal/login', { method: 'POST', form: { _csrf: csrf, email: 'it@example.org' } });
-    // Unknown emails get the same response and no email.
-    await portal.request('/portal/login', { method: 'POST', form: { _csrf: csrf, email: 'nobody@nowhere.example' } });
+    // The sign-in link is dispatched immediately after the response, not on the next cron tick.
+    expect(mail.sent.some((m) => /sign-in link/.test(m.subject) && m.to[0].email === 'it@example.org')).toBe(true);
+    // A new email address gets a link; the account is created unverified and has no customers.
+    await portal.request('/portal/login', { method: 'POST', form: { _csrf: csrf, email: 'Newcomer@Example.net' } });
     await sendMail();
     const msg = [...mail.sent].reverse().find((m) => /sign-in link/.test(m.subject) && m.to[0].email === 'it@example.org')!;
-    expect(mail.sent.some((m) => m.to[0].email === 'nobody@nowhere.example')).toBe(false);
+    expect(mail.sent.some((m) => /sign-in link/.test(m.subject) && m.to[0].email === 'newcomer@example.net')).toBe(true);
+    const [nu] = await sql<{ email_verified_at: Date | null; n: number }[]>`
+      SELECT u.email_verified_at, (SELECT count(*)::int FROM customer_members m WHERE m.portal_user_id = u.id) AS n FROM portal_users u WHERE u.email = 'newcomer@example.net'`;
+    expect(nu).toMatchObject({ email_verified_at: null, n: 0 });
+    // Disabled accounts get nothing.
+    await sql`INSERT INTO portal_users (id, email, status) VALUES ('usr_disabled_test', 'disabled@example.net', 'disabled')`;
+    await portal.request('/portal/login', { method: 'POST', form: { _csrf: csrf, email: 'disabled@example.net' } });
+    await sendMail();
+    expect(mail.sent.some((m) => m.to[0].email === 'disabled@example.net')).toBe(false);
     const link = new URL(/https?:\/\/\S+\/portal\/auth\/verify\?token=[A-Za-z0-9_-]+/.exec(msg.text)![0]);
     const page = await portal.request(link.pathname + link.search);
     expect(await page.text()).toMatch(/Continue signing in/); // GET does not consume

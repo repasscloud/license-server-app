@@ -133,3 +133,22 @@ export function logError(c: Ctx, e: unknown) {
   const err = e as Error & { code?: string };
   console.error(JSON.stringify({ t: new Date().toISOString(), requestId: c.get('requestId'), level: 'error', name: err?.name, code: err?.code, message: String(err?.message ?? e).slice(0, 500) }));
 }
+
+/**
+ * Best-effort: send queued email right after the response (sign-in links should not wait for the
+ * next cron tick). Always called, whether or not anything was queued, so it reveals nothing. Cron
+ * remains the durable path. Separate connection because the request's pool is closed.
+ */
+export function kickEmailDispatch(c: Ctx) {
+  c.executionCtx.waitUntil((async () => {
+    const { dispatchEmails } = await import('../services/email.ts');
+    const d = makeDeps(c.env);
+    try {
+      await dispatchEmails(d.sql, d.config, d.mail, 2);
+    } catch {
+      /* cron will retry */
+    } finally {
+      await d.sql.end({ timeout: 5 });
+    }
+  })());
+}

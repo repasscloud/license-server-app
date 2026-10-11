@@ -50,10 +50,15 @@ export async function requestLogin(sql: Sql, config: Config, realm: Realm, rawEm
     { key: `login:${realm}:ip:${ipHash}`, limit: 30, windowSeconds: 3600 },
   ]);
   if (!rl.allowed) return;
+  // Customers: the first sign-in creates the portal account (purchases attach to it by email later).
+  // It stays unverified until the emailed link is used. Disabled accounts get nothing.
+  // Admins: only existing, active administrators.
   const subject = realm === 'customer'
-    ? (await sql<{ id: string }[]>`SELECT id FROM portal_users WHERE email = ${email} AND status = 'active'`)[0]
-    : (await sql<{ id: string }[]>`SELECT id FROM admin_users WHERE email = ${email} AND status = 'active'`)[0];
-  if (!subject) return;
+    ? (await sql<{ id: string; status: string }[]>`
+        INSERT INTO portal_users (id, email) VALUES (${newId('usr')}, ${email})
+        ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email RETURNING id, status`)[0]
+    : (await sql<{ id: string; status: string }[]>`SELECT id, status FROM admin_users WHERE email = ${email}`)[0];
+  if (!subject || subject.status !== 'active') return;
   const token = newOpaqueToken();
   const id = newId('chl');
   await sql.begin(async (tx) => {

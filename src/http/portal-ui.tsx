@@ -17,7 +17,7 @@ import { addMember, listCustomerEntitlements, removeMember } from '../services/c
 import { consumeLoginLink, logout, requestLogin } from '../services/human-auth.ts';
 import * as licensing from '../services/licensing.ts';
 import { Badge, Csrf, fmt, Layout, money } from '../views/layout.tsx';
-import { type AppEnv, type Ctx, logError, toAppError } from './context.ts';
+import { type AppEnv, type Ctx, kickEmailDispatch, logError, toAppError } from './context.ts';
 import { clearSessionCookie, csrfGuard, formData, loadSession, setSessionCookie } from './session.ts';
 
 type Role = 'owner' | 'admin' | 'billing' | 'member';
@@ -34,7 +34,7 @@ const back = (c: Ctx, msg: string, kind: 'ok' | 'err' = 'ok') => c.redirect(`/po
 
 portalUi.get('/login', (c) => page(c, 'Sign in', (
   <div class="card"><h1>Customer portal sign-in</h1>
-    <p class="muted">Enter the email address used for your purchase or registration. We will email you a single-use sign-in link (no password).</p>
+    <p class="muted">Enter your email address. We will email you a single-use sign-in link (no password). New here? The same link creates your account.</p>
     <form method="post" action="/portal/login"><Csrf token={c.get('csrf')} /><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required /><button type="submit">Email me a sign-in link</button></form></div>
 )));
 
@@ -42,10 +42,11 @@ portalUi.post('/login', async (c) => {
   const f = await formData(c);
   try {
     await requestLogin(c.get('deps').sql, c.get('deps').config, 'customer', f.email ?? '', c.get('ipHash'), c.req.query('next'));
+    kickEmailDispatch(c);
   } catch (e) {
     logError(c, e);
   }
-  return page(c, 'Check your email', <div class="card"><h1>Check your email</h1><p>If we have an account for that address, a sign-in link is on its way. It expires in 15 minutes and works once.</p></div>);
+  return page(c, 'Check your email', <div class="card"><h1>Check your email</h1><p>A sign-in link is on its way to that address. It expires in 15 minutes and works once. If this is your first sign-in, your account is created when you use the link.</p></div>);
 });
 
 portalUi.get('/auth/verify', (c) => page(c, 'Sign in', (
