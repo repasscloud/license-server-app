@@ -2827,7 +2827,7 @@
         "tags": [
           "Licensing"
         ],
-        "summary": "Audited policy amendment (seats, transfer allowance, expiry)",
+        "summary": "Audited policy amendment (seats, transfer allowance, expiry, clearReview)",
         "description": "Requires scope `entitlements:issue`.",
         "security": [
           {

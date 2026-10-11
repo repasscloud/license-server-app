@@ -1,0 +1,21 @@
+# ADR-0005: Stripe and MailerSend integration
+
+- **Status:** Accepted · 2026-10-11
+
+## Stripe
+
+- **The database is the catalogue master.** Offers and price versions are created in PostgreSQL. The server then creates the Stripe Product (one per offer) and an **immutable Stripe Price per price version**, with a deterministic idempotency key (`repass-price-<priceVersionId>`), and stores the IDs. Changing an amount, currency or interval creates a new price version. Activating it archives the previous version, and existing subscriptions keep their price.
+- **Drift is detected, never adopted.** The daily tick and the admin action compare mapped Stripe prices with the database. A mismatch marks the mapping `drifted`, which makes it unsellable. Repair is an explicit admin action: `retry`, `reactivate` or `recreate`.
+- **API version pinned to `2026-08-26.dahlia`.** It is the newest release of the line whose object shapes (subscription item periods, `invoice.parent.subscription_details`) the code was written and tested against. `2026-09-30.endive` was released 11 days before this work and has not been reviewed. Upgrading means updating `STRIPE_API_VERSION`, re-reading the changelog, and running a test-mode end-to-end pass.
+- **No SDK.** A small fetch adapter handles form encoding, idempotency keys on every POST, timeouts and error classification. Webhook verification is HMAC-SHA256 of `t.rawBody` with a 300-second tolerance, compared in constant time.
+- **Checkout** accepts only sku, currency, quantity, email and idempotency key from the browser. Everything else comes from the database. Fulfilment requires verified Stripe state, re-fetched from the API, and checks it against the stored snapshot. `livemode` must match the configured key.
+- **Lifecycle events handled:** `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `invoice.paid`, `invoice.payment_failed`, `customer.subscription.created`, `.updated`, `.deleted` and `.trial_will_end`, `charge.refunded`, `charge.dispute.created`, `charge.dispute.closed`. Refund and dispute handling follows each component's `refund_action` / `dispute_action` (`revoke` | `review` | `none`). Partial refunds always go to review. A won dispute is flagged and never automatically un-revoked. Cancellation and non-payment never revoke anything.
+- **Tax** is opt-in per offer (`automatic_tax`, `tax_id_collection`). This requires **Stripe Tax** to be configured in the Stripe account, including Australian GST registration if applicable. The server does not calculate tax itself. Price versions carry `tax_behavior`.
+
+## MailerSend
+
+- Templates live in `email_templates` (subject, HTML, text, optional MailerSend template ID). `{{var}}` is HTML-escaped; `{{{var}}}` is reserved for server-built fragments.
+- The outbox is the only path. Recipients and variables are AES-GCM-encrypted at rest and purged once a message is sent or reaches a terminal state. The `business_key UNIQUE` constraint guarantees one email per business event.
+- Retry policy: 429 and 5xx are retried, honouring `Retry-After` and using exponential backoff up to 10 attempts. Other 4xx responses are dead immediately. A timeout means the message *may* have been sent, so the email is marked **`uncertain`** and is not resent automatically. MailerSend documents no idempotency key, so resending could duplicate mail. An operator resolves it from the admin UI.
+- The optional delivery webhook is verified with HMAC-SHA256 hex of the raw body (`Signature` header). It updates delivered/bounced state and suppresses hard bounces and complaints. **Without `MAILERSEND_WEBHOOK_SECRET` the endpoint returns 404**, and the UI states that "sent" means *accepted*, not delivered.
+- The outbox refuses marketing mail. Marketing requires a separate, consent-based system.

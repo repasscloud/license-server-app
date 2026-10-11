@@ -64,7 +64,12 @@ export class FakeStripe {
   idem = new Map<string, unknown>();
   failures: Array<{ match: RegExp; status: number; times: number }> = [];
 
-  constructor(readonly webhookSecret: string, readonly apiVersion = '2026-08-26.dahlia') {}
+  readonly webhookSecret: string;
+  readonly apiVersion: string;
+  constructor(webhookSecret: string, apiVersion = '2026-08-26.dahlia') {
+    this.webhookSecret = webhookSecret;
+    this.apiVersion = apiVersion;
+  }
 
   async start() {
     this.server = createServer((req, res) => void this.handle(req, res));

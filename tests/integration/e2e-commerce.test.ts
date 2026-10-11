@@ -29,6 +29,8 @@ let token: string;
 const trusted: TrustedKey[] = VECTORS.keys.map((k) => ({ keyId: k.keyId, algorithm: k.algorithm, publicKey: base64UrlDecode(k.publicKey) }));
 const secret = () => base64UrlEncode(crypto.getRandomValues(new Uint8Array(32)));
 const device = (n: number) => n.toString(16).toUpperCase().padStart(64, 'A');
+/** The 43-char secret part of rpl_(pat|svc)_<16>_<43> (the secret itself may contain '_'). */
+const tokenSecret = (t: string) => /^rpl_(?:pat|svc)_[0-9A-Z]{16}_([A-Za-z0-9_-]{43})$/.exec(t)![1]!;
 
 const ids: Record<string, string> = {};
 
@@ -347,6 +349,9 @@ describe('server-created checkout and verified fulfilment', () => {
     await drain();
     const [e] = await sql<{ status: string; review_required: boolean }[]>`SELECT status, review_required FROM entitlements`;
     expect(e).toMatchObject({ status: 'active', review_required: true });
+    // Support decides to keep the licence: the flag is cleared with an audited amendment.
+    await ok('POST', `/licenses/${ids.licenseId}/amend`, { clearReview: true, reason: 'dispute evidence submitted' });
+    expect((await sql<{ review_required: boolean }[]>`SELECT review_required FROM entitlements`)[0]!.review_required).toBe(false);
   });
 });
 
@@ -571,7 +576,7 @@ describe('admin API tokens: scopes, revocation, idempotency, audit', () => {
     expect(t.status).toBe(201);
     expect(t.body.token).toMatch(/^rpl_svc_[0-9A-Z]{16}_[A-Za-z0-9_-]{43}$/);
     const [row] = await sql<{ secret_hash: Uint8Array }[]>`SELECT secret_hash FROM admin_api_tokens WHERE id = ${t.body.id}`;
-    expect(Buffer.from(row!.secret_hash).toString()).not.toContain(t.body.token.split('_').pop());
+    expect(Buffer.from(row!.secret_hash).toString()).not.toContain(tokenSecret(t.body.token));
     expect((await api('GET', '/products', undefined, { token: t.body.token })).status).toBe(200);
     expect((await api('POST', '/tokens', { name: 'esc', serviceAccountId: created.body.id, scopes: ['products:write'] }, { token: root.token })).status).toBe(403);
     const rotated = await api('POST', `/tokens/${t.body.id}/rotate`, {}, { token: root.token });
@@ -579,7 +584,7 @@ describe('admin API tokens: scopes, revocation, idempotency, audit', () => {
     expect((await api('GET', '/products', undefined, { token: t.body.token })).status).toBe(401);
     expect((await api('GET', '/products', undefined, { token: rotated.body.token })).status).toBe(200);
     const listed = await api('GET', '/tokens', undefined, { token: root.token });
-    expect(JSON.stringify(listed.body)).not.toContain(rotated.body.token.split('_').pop());
+    expect(JSON.stringify(listed.body)).not.toContain(tokenSecret(rotated.body.token));
   });
 
   it('Idempotency-Key replays the first response; destructive operations need confirm', async () => {
@@ -598,7 +603,7 @@ describe('admin API tokens: scopes, revocation, idempotency, audit', () => {
     expect(r.status).toBe(200);
     expect(r.body.data.length).toBeGreaterThan(20);
     const blob = JSON.stringify(await sql`SELECT detail, actor_id FROM audit_events`);
-    expect(blob).not.toContain(token.split('_').pop());
+    expect(blob).not.toContain(tokenSecret(token));
     expect(blob).not.toMatch(/rpl_(pat|svc)_[0-9A-Z]{16}_[A-Za-z0-9_-]{43}/);
   });
 

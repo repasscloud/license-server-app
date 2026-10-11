@@ -348,7 +348,7 @@ export async function reissueLicense(sql: Sql, config: Config, actor: Actor, lic
  * Explicit, audited policy amendment for one entitlement (e.g. support changes seats).
  * Creates a new immutable snapshot; never silently follows catalogue edits.
  */
-export async function amendEntitlement(sql: Sql, actor: Actor, licenseId: string, input: { seats?: number; transferAllowance?: number; expiresAt?: Date; reason: string }) {
+export async function amendEntitlement(sql: Sql, actor: Actor, licenseId: string, input: { seats?: number; transferAllowance?: number; expiresAt?: Date; clearReview?: boolean; reason: string }) {
   requirePermission(actor, 'entitlements:issue');
   if (!input.reason?.trim()) throw invalid('A reason is required');
   return sql.begin(async (tx) => {
@@ -367,8 +367,11 @@ export async function amendEntitlement(sql: Sql, actor: Actor, licenseId: string
     const snapshotId = newId('eps');
     await tx`INSERT INTO entitlement_policy_snapshots (id, snapshot, reason, created_by) VALUES (${snapshotId}, ${tx.json(EffectivePolicySchema.parse(policy) as never)}, ${'amendment: ' + input.reason}, ${actor.label})`;
     await tx`UPDATE entitlements SET policy_snapshot_id = ${snapshotId}, seats = ${policy.seats}, transfer_allowance = ${policy.transferAllowance},
-             expires_at = coalesce(${input.expiresAt ?? null}::timestamptz, expires_at) WHERE id = ${ctx.entitlementId}`;
-    await audit(tx, actor, { action: 'entitlement.amended', resourceType: 'entitlement', resourceId: ctx.entitlementId, detail: { licenseId, seats: input.seats, transferAllowance: input.transferAllowance, expiresAt: input.expiresAt, reason: input.reason } });
+             expires_at = coalesce(${input.expiresAt ?? null}::timestamptz, expires_at),
+             review_required = CASE WHEN ${!!input.clearReview} THEN false ELSE review_required END,
+             review_reason = CASE WHEN ${!!input.clearReview} THEN NULL ELSE review_reason END
+             WHERE id = ${ctx.entitlementId}`;
+    await audit(tx, actor, { action: 'entitlement.amended', resourceType: 'entitlement', resourceId: ctx.entitlementId, detail: { licenseId, seats: input.seats, transferAllowance: input.transferAllowance, expiresAt: input.expiresAt, clearReview: !!input.clearReview, reason: input.reason } });
     return { licenseId, seats: policy.seats, transferAllowance: policy.transferAllowance };
   });
 }

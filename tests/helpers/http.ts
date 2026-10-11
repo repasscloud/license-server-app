@@ -22,7 +22,12 @@ export class TestCtx {
 
 export class Client {
   cookies = new Map<string, string>();
-  constructor(readonly env: Env, readonly base = 'http://localhost:8787') {}
+  readonly env: Env;
+  readonly base: string;
+  constructor(env: Env, base = 'http://localhost:8787') {
+    this.env = env;
+    this.base = base;
+  }
 
   async request(path: string, init: RequestInit & { form?: Record<string, string>; json?: unknown; token?: string; ip?: string } = {}): Promise<Response> {
     const headers = new Headers(init.headers);

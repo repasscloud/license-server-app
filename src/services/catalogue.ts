@@ -55,12 +55,14 @@ export async function createProduct(sql: Sql, actor: Actor, raw: unknown) {
   });
 }
 
-export async function updateProduct(sql: Sql, actor: Actor, id: string, raw: unknown) {
+export async function updateProduct(sql: Sql, actor: Actor, idOrSlug: string, raw: unknown) {
   requirePermission(actor, 'products:write');
   const input = UpdateProductInput.parse(raw);
   return sql.begin(async (tx) => {
-    const [p] = await tx<{ status: string }[]>`SELECT status FROM products WHERE id = ${id} FOR UPDATE`;
+    // Accept the internal id or the immutable slug (wire productId), like getProduct.
+    const [p] = await tx<{ id: string; status: string }[]>`SELECT id, status FROM products WHERE id = ${idOrSlug} OR slug = ${idOrSlug} FOR UPDATE`;
     if (!p) throw notFound('Product');
+    const id = p.id;
     await tx`UPDATE products SET
       name = coalesce(${input.name ?? null}, name),
       description = coalesce(${input.description ?? null}, description),

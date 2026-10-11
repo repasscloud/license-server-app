@@ -692,6 +692,7 @@ adminUi.get('/licenses/:id', async (c) => {
           </>
         ) : <p class="muted">This edition does not track devices.</p>}
         <h2>Actions</h2>
+        {l.review_required && can(c, 'entitlements:issue') ? <F path="clear-review"><p>Flagged for review: {l.review_reason}</p><label for="crr">Decision / reason</label><input id="crr" name="reason" required /><button type="submit">Mark reviewed (keep active)</button></F> : null}
         <div class="row">
           {can(c, 'licenses:issue') ? <F path="reissue"><label for="org">Organisation name (blank keeps)</label><input id="org" name="organisationName" value={l.organisation_name ?? ''} /><label for="rir">Reason</label><input id="rir" name="reason" required /><button type="submit">Re-issue (same licence id)</button></F> : null}
           {can(c, 'licenses:issue') ? <F path="rotate-key"><p>Rotate the activation key. The old key stops working; activations are unaffected. The new key is shown once.</p><button type="submit">Rotate activation key</button></F> : null}
@@ -740,6 +741,10 @@ adminUi.post('/licenses/:id/reissue', action(async (c, f) => {
 adminUi.post('/licenses/:id/amend', action(async (c, f) => {
   await licensing.amendEntitlement(c.get('deps').sql, c.get('actor'), c.req.param('id')!, { seats: Number(f.seats), reason: f.reason ?? '' });
   return back(c, `/admin/licenses/${c.req.param('id')}`, 'Entitlement amended');
+}));
+adminUi.post('/licenses/:id/clear-review', action(async (c, f) => {
+  await licensing.amendEntitlement(c.get('deps').sql, c.get('actor'), c.req.param('id')!, { clearReview: true, reason: f.reason ?? '' });
+  return back(c, `/admin/licenses/${c.req.param('id')}`, 'Review cleared');
 }));
 adminUi.post('/licenses/:id/transfers/grant', action(async (c, f) => {
   await licensing.grantTransfers(c.get('deps').sql, c.get('actor'), c.req.param('id')!, Number(f.amount), f.reason ?? '');

@@ -44,7 +44,7 @@ const ADMIN_OPS: Op[] = [
   { tag: 'Licensing', method: 'post', path: `${A}/licenses/{id}/revoke`, summary: 'Revoke (affects future server interactions only; offline installs are not remotely disabled)', scope: 'entitlements:revoke', destructive: true, example: { reason: 'chargeback', confirm: 'lic_…' } },
   { tag: 'Licensing', method: 'post', path: `${A}/licenses/{id}/unrevoke`, summary: 'Reverse a revocation', scope: 'entitlements:revoke', destructive: true, example: { reason: 'dispute won', confirm: 'lic_…' } },
   { tag: 'Licensing', method: 'post', path: `${A}/licenses/{id}/reissue`, summary: 'Re-sign with the same licenseId (optionally correct names)', scope: 'licenses:issue', example: { reason: 'organisation renamed', organisationName: 'New Name Pty Ltd' } },
-  { tag: 'Licensing', method: 'post', path: `${A}/licenses/{id}/amend`, summary: 'Audited policy amendment (seats, transfer allowance, expiry)', scope: 'entitlements:issue', example: { seats: 5, reason: 'upgrade agreed by sales' } },
+  { tag: 'Licensing', method: 'post', path: `${A}/licenses/{id}/amend`, summary: 'Audited policy amendment (seats, transfer allowance, expiry, clearReview)', scope: 'entitlements:issue', example: { seats: 5, reason: 'upgrade agreed by sales' } },
   { tag: 'Licensing', method: 'post', path: `${A}/licenses/{id}/activation-key/rotate`, summary: 'Rotate the activation key (returned once)', scope: 'licenses:issue' },
   { tag: 'Licensing', method: 'get', path: `${A}/licenses/{id}/transfers`, summary: 'Rolling 365-day transfer usage', scope: 'activations:read' },
   { tag: 'Licensing', method: 'post', path: `${A}/licenses/{id}/transfers/grant`, summary: 'Grant extra transfers', scope: 'transfers:write', example: { amount: 1, reason: 'hardware failure' } },
