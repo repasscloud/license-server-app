@@ -6070,7 +6070,7 @@
                 "majorVersion": 2,
                 "activationKey": "ABCDE-FGHJK-MNPQR-STVWX-YZ012-34567",
                 "deviceId": "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
-                "clientSecret": "q0V9nbg2u6zq1o0sR1JjKXz5a0vDqzM3o9o7fJx4mWc"
+                "clientSecret": "EXAMPLE-client-secret-43-chars-base64url-xx"
               }
             }
           }

@@ -126,7 +126,7 @@ export function openApiDocument(origin: string) {
     post: {
       tags: ['Machine API v1 (binding)'], summary: 'Activate (business) or provision (other editions)', security: [],
       description: 'Binding contract: LICENSING-SERVER-BRIEF.md §5.1. Authenticated by the activation key. Rate limited per IP and key.',
-      requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/ActivateRequest' }, example: { productId: 'cursedelete', majorVersion: 2, activationKey: 'ABCDE-FGHJK-MNPQR-STVWX-YZ012-34567', deviceId: '0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF', clientSecret: 'q0V9nbg2u6zq1o0sR1JjKXz5a0vDqzM3o9o7fJx4mWc' } } } },
+      requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/ActivateRequest' }, example: { productId: 'cursedelete', majorVersion: 2, activationKey: 'ABCDE-FGHJK-MNPQR-STVWX-YZ012-34567', deviceId: '0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF', clientSecret: 'EXAMPLE-client-secret-43-chars-base64url-xx' } } } },
       responses: { '200': { description: 'Licence and (business) activation certificate', content: { 'application/json': { schema: { $ref: '#/components/schemas/MachineResponse' } } } }, ...machineResp({ '400': 'invalid_request', '403': 'revoked', '404': 'invalid_key', '409': 'seat_limit | transfer_limit | subscription_expired', '422': 'product_mismatch | version_mismatch', '429': 'rate_limited', '503': 'server_error' }) },
     },
   };
