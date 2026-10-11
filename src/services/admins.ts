@@ -22,6 +22,7 @@ import { audit } from './audit.ts';
 import { normaliseEmail } from './customers.ts';
 import { revokeAllSessions } from './human-auth.ts';
 import { checkRateLimits } from './rate-limit.ts';
+import { enqueueEmail } from './email.ts';
 
 // ---------------------------------------------------------------------------------------------
 // Permissions resolution
@@ -50,7 +51,7 @@ export const InviteAdminInput = z.object({
   roles: z.array(z.string()).min(1),
 }).strict();
 
-export async function inviteAdmin(sql: Sql, actor: Actor, raw: unknown) {
+export async function inviteAdmin(sql: Sql, actor: Actor, raw: unknown, config?: Config) {
   requireHighRisk(actor, 'admins:manage');
   const input = InviteAdminInput.parse(raw);
   return sql.begin(async (tx) => {
@@ -62,6 +63,10 @@ export async function inviteAdmin(sql: Sql, actor: Actor, raw: unknown) {
     await tx`INSERT INTO admin_users (id, email, display_name) VALUES (${id}, ${input.email}, ${input.displayName})`;
     for (const r of roles) await tx`INSERT INTO admin_user_roles (admin_user_id, role_id, granted_by) VALUES (${id}, ${r.id}, ${actor.label})`;
     await audit(tx, actor, { action: 'admin.invited', resourceType: 'admin_user', resourceId: id, detail: { roles: input.roles } });
+    if (config) {
+      await enqueueEmail(tx, config, { businessKey: `admin_invited:${id}`, templateKey: 'admin_invited', category: 'security', to: input.email,
+        vars: { roles: input.roles.join(', '), adminUrl: new URL('/admin/login', config.publicBaseUrl).toString() } });
+    }
     return { id, email: input.email, displayName: input.displayName, roles: input.roles };
   });
 }

@@ -203,7 +203,7 @@ portalUi.post('/activations/:id/release', guarded(async (c) => {
   const [a] = await c.get('deps').sql<{ license_id: string }[]>`SELECT license_id FROM activations WHERE id = ${c.req.param('id')!}`;
   if (!a) throw notFound('Activation');
   await licenceAccess(c, a.license_id, MANAGE);
-  await licensing.releaseActivation(c.get('deps').sql, c.get('actor'), c.req.param('id')!, 'portal');
+  await licensing.releaseActivation(c.get('deps').sql, c.get('actor'), c.req.param('id')!, 'portal', c.get('deps').config);
   return back(c, 'Device released. An offline device learns about this the next time it renews.');
 }));
 
@@ -216,7 +216,7 @@ portalUi.post('/customers/:id/billing', guarded(async (c) => {
 portalUi.post('/customers/:id/members', guarded(async (c, f) => {
   await customerAccess(c, c.req.param('id')!, MANAGE);
   if (!['member', 'billing', 'admin'].includes(f.role ?? '')) throw new AppError('validation_failed', 'Invalid role');
-  await addMember(c.get('deps').sql, c.get('actor'), c.req.param('id')!, f.email ?? '', f.role as 'member');
+  await addMember(c.get('deps').sql, c.get('actor'), c.req.param('id')!, f.email ?? '', f.role as 'member', c.get('deps').config);
   return back(c, 'Access granted. They can sign in with their email address.');
 }));
 

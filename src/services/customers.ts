@@ -7,6 +7,8 @@ import { conflict, notFound } from '../lib/errors.ts';
 import { newId } from '../lib/ids.ts';
 import { requirePermission, type Actor } from './actor.ts';
 import { audit } from './audit.ts';
+import { enqueueEmail } from './email.ts';
+import type { Config } from '../config.ts';
 
 export const normaliseEmail = (e: string) => e.trim().toLowerCase();
 const email = z.email().max(254).transform(normaliseEmail);
@@ -75,15 +77,19 @@ export async function ensurePortalUser(db: Db, rawEmail: string): Promise<string
   return u!.id;
 }
 
-export async function addMember(sql: Sql, actor: Actor, customerId: string, rawEmail: string, role: 'admin' | 'billing' | 'member') {
+export async function addMember(sql: Sql, actor: Actor, customerId: string, rawEmail: string, role: 'admin' | 'billing' | 'member', config?: Config) {
   if (actor.type !== 'customer') requirePermission(actor, 'customers:write');
   return sql.begin(async (tx) => {
-    const [c] = await tx`SELECT 1 FROM customers WHERE id = ${customerId}`;
+    const [c] = await tx<{ display_name: string; organisation_name: string | null }[]>`SELECT display_name, organisation_name FROM customers WHERE id = ${customerId}`;
     if (!c) throw notFound('Customer');
     const userId = await ensurePortalUser(tx, rawEmail);
     const r = await tx`INSERT INTO customer_members (customer_id, portal_user_id, role) VALUES (${customerId}, ${userId}, ${role}) ON CONFLICT DO NOTHING RETURNING 1`;
     if (!r.length) throw conflict('That person is already a member');
     await audit(tx, actor, { action: 'customer.member_added', resourceType: 'customer', resourceId: customerId, detail: { portalUserId: userId, role } });
+    if (config) {
+      await enqueueEmail(tx, config, { businessKey: `portal_access:${customerId}:${userId}:${Date.now()}`, templateKey: 'portal_access_granted', category: 'security', to: normaliseEmail(rawEmail),
+        vars: { customerName: c.organisation_name ?? c.display_name, role, grantedBy: actor.type === 'customer' ? actor.label : 'RePassCloud support' } });
+    }
     return { customerId, portalUserId: userId, role };
   });
 }

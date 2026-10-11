@@ -15,6 +15,7 @@ import { newId, randomBytes } from '../lib/ids.ts';
 import { addInterval } from '../lib/time.ts';
 import { requireHighRisk, requirePermission, type Actor } from './actor.ts';
 import { audit } from './audit.ts';
+import { enqueueEmail } from './email.ts';
 import { loadSigners } from './signing-keys.ts';
 
 // ---------------------------------------------------------------------------------------------
@@ -382,6 +383,7 @@ export async function rotateActivationKey(sql: Sql, config: Config, actor: Actor
     // The new key is returned now; the reveal slot is cleared so it is shown exactly once.
     await tx`UPDATE activation_keys SET reveal_ciphertext = NULL, reveal_expires_at = NULL WHERE id = ${ak.id}`;
     await audit(tx, actor, { action: 'activation_key.rotated', resourceType: 'license', resourceId: licenseId, detail: { keyHint: ak.key.slice(-5) } });
+    await notifyOwner(tx, config, licenseId, 'activation_key_rotated', `key_rotated:${ak.id}`, { rotatedBy: actor.type === 'customer' ? 'a member of your organisation' : 'RePassCloud support' });
     return { licenseId, activationKey: ak.key, keyHint: ak.key.slice(-5) };
   });
 }
@@ -400,7 +402,13 @@ export async function revealActivationKey(sql: Sql, config: Config, actor: Actor
 }
 
 /** Release a device seat from the portal or by support. Counts toward transfers when replaced. */
-export async function releaseActivation(sql: Sql, actor: Actor, activationId: string, by: 'portal' | 'support') {
+/** Security notification to the customer's billing contact about a licence. */
+async function notifyOwner(tx: Tx, config: Config, licenseId: string, templateKey: string, businessKey: string, vars: Record<string, string>) {
+  const [c] = await tx<{ billing_email: string }[]>`SELECT c.billing_email FROM licenses l JOIN entitlements e ON e.id = l.entitlement_id JOIN customers c ON c.id = e.customer_id WHERE l.id = ${licenseId}`;
+  if (c) await enqueueEmail(tx, config, { businessKey, templateKey, category: 'security', to: c.billing_email, vars: { licenseId, ...vars } });
+}
+
+export async function releaseActivation(sql: Sql, actor: Actor, activationId: string, by: 'portal' | 'support', config?: Config) {
   if (by === 'support') requirePermission(actor, 'activations:release');
   return sql.begin(async (tx) => {
     const [a] = await tx<{ license_id: string; status: string }[]>`SELECT license_id, status FROM activations WHERE id = ${activationId}`;
@@ -409,6 +417,10 @@ export async function releaseActivation(sql: Sql, actor: Actor, activationId: st
     if (a.status !== 'active') return { activationId, status: 'inactive', changed: false, licenseId: a.license_id };
     await tx`UPDATE activations SET status = 'inactive', deactivated_at = now(), deactivated_by = ${by} WHERE id = ${activationId}`;
     await audit(tx, actor, { action: 'activation.released', resourceType: 'activation', resourceId: activationId, detail: { licenseId: a.license_id, by } });
+    if (config) {
+      const [d] = await tx<{ device_id: string }[]>`SELECT device_id FROM activations WHERE id = ${activationId}`;
+      await notifyOwner(tx, config, a.license_id, 'device_released', `device_released:${activationId}`, { activationId, deviceSuffix: d!.device_id.slice(-8), releasedBy: by === 'portal' ? 'a member of your organisation' : 'RePassCloud support' });
+    }
     return { activationId, status: 'inactive', changed: true, licenseId: a.license_id };
   });
 }

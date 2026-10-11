@@ -617,7 +617,7 @@ adminUi.post('/customers/:id/grant', action(async (c, f) => {
   });
 }));
 adminUi.post('/customers/:id/members', action(async (c, f) => {
-  await customers.addMember(c.get('deps').sql, c.get('actor'), c.req.param('id')!, f.email ?? '', f.role as 'member');
+  await customers.addMember(c.get('deps').sql, c.get('actor'), c.req.param('id')!, f.email ?? '', f.role as 'member', c.get('deps').config);
   return back(c, `/admin/customers/${c.req.param('id')}`, 'Member added');
 }));
 adminUi.post('/customers/:id/members/:userId/remove', action(async (c) => {
@@ -754,7 +754,7 @@ adminUi.post('/licenses/:id/rotate-key', action(async (c) => {
   return render(c, { title: 'New activation key', body: <div class="card"><h1>New activation key</h1><p>Shown once. The previous key no longer works.</p><code class="secret">{r.activationKey}</code><p><a href={`/admin/licenses/${r.licenseId}`}>Back to licence</a></p></div> });
 }));
 adminUi.post('/activations/:id/release', action(async (c, f) => {
-  await licensing.releaseActivation(c.get('deps').sql, c.get('actor'), c.req.param('id')!, 'support');
+  await licensing.releaseActivation(c.get('deps').sql, c.get('actor'), c.req.param('id')!, 'support', c.get('deps').config);
   return back(c, `/admin/licenses/${f.licenseId}`, 'Device released (an offline device learns this on its next renew)');
 }));
 
@@ -1015,7 +1015,7 @@ adminUi.post('/access/tokens/:id/rotate', action(async (c) => {
   const t = await admins.rotateApiToken(c.get('deps').sql, c.get('deps').config, c.get('actor'), c.req.param('id')!);
   return render(c, { title: 'Token rotated', body: <div class="card"><h1>Token rotated</h1><p>The old token is revoked. Copy the new one now:</p><code class="secret">{t.token}</code><p><a href="/admin/access">Back</a></p></div> });
 }));
-adminUi.post('/access/admins', action(async (c, f) => (await admins.inviteAdmin(c.get('deps').sql, c.get('actor'), { email: f.email, displayName: f.displayName, roles: list(f.roles) }), back(c, '/admin/access', 'Administrator invited; they can now request a sign-in link'))));
+adminUi.post('/access/admins', action(async (c, f) => (await admins.inviteAdmin(c.get('deps').sql, c.get('actor'), { email: f.email, displayName: f.displayName, roles: list(f.roles) }, c.get('deps').config), back(c, '/admin/access', 'Administrator invited; they can now request a sign-in link'))));
 adminUi.post('/access/admins/:id/roles', action(async (c, f) => (await admins.setAdminRoles(c.get('deps').sql, c.get('actor'), c.req.param('id')!, list(f.roles)), back(c, '/admin/access', 'Roles updated'))));
 adminUi.post('/access/admins/:id/status', action(async (c, f) => {
   if (f.confirm?.trim() !== c.req.param('id')) throw new AppError('precondition_failed', 'Confirmation text did not match the administrator id');

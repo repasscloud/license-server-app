@@ -8,7 +8,7 @@ import type { Sql } from '../db/client.ts';
 import type { MailTransport } from '../integrations/mail.ts';
 import type { StripeClient } from '../integrations/stripe.ts';
 import { processStripeEvent, reconcileCheckouts, reconcileSubscriptions, RetryLater } from '../services/billing.ts';
-import { dispatchEmails } from '../services/email.ts';
+import { dispatchEmails, enqueueEmail } from '../services/email.ts';
 import { claimJobs, completeJob, failJob, type Job } from '../services/jobs.ts';
 import { purgeRateLimitBuckets } from '../services/rate-limit.ts';
 import { archiveStripePrice, checkDrift, syncOffer, syncPrice } from '../services/stripe-sync.ts';
@@ -77,6 +77,7 @@ export async function dailyTick(d: JobDeps): Promise<Record<string, unknown>> {
     out.subscriptions = (await reconcileSubscriptions(d.sql, d.config, d.stripe, 3)).length;
     out.drift = await checkDrift(d.sql, d.stripe, 5);
   }
+  out.expiringReminders = await queueExpiringReminders(d);
   out.rateBuckets = await purgeRateLimitBuckets(d.sql);
   const challenges = await d.sql`DELETE FROM auth_challenges WHERE expires_at < now() - interval '7 days'`;
   const sessions = await d.sql`DELETE FROM auth_sessions WHERE expires_at < now() - interval '30 days'`;
@@ -87,4 +88,24 @@ export async function dailyTick(d: JobDeps): Promise<Record<string, unknown>> {
   const mail = await d.sql`DELETE FROM email_outbox WHERE status IN ('sent', 'delivered', 'suppressed', 'bounced') AND created_at < now() - interval '180 days'`;
   Object.assign(out, { challenges: challenges.count, sessions: sessions.count, idempotency: idem.count, jobs: jobs.count, stripePayloadsPurged: events.count, mail: mail.count });
   return out;
+}
+
+/**
+ * Seven-day expiry notice for terms that will NOT renew automatically (fixed terms, cancelled or
+ * unpaid subscriptions). One email per licence per expiry date (business-key idempotency).
+ */
+async function queueExpiringReminders(d: JobDeps): Promise<number> {
+  const rows = await d.sql<{ license_id: string; expires_at: Date; billing_email: string; product: string }[]>`
+    SELECT l.id AS license_id, e.expires_at, c.billing_email, p.name || ' ' || m.major_version AS product
+    FROM entitlements e JOIN licenses l ON l.entitlement_id = e.id JOIN customers c ON c.id = e.customer_id
+    JOIN product_majors m ON m.id = e.product_major_id JOIN products p ON p.id = m.product_id
+    LEFT JOIN subscriptions s ON s.id = e.subscription_id
+    WHERE e.status = 'active' AND e.expires_at BETWEEN now() + interval '6 days' AND now() + interval '7 days'
+      AND (s.id IS NULL OR s.cancel_at_period_end OR s.status NOT IN ('active', 'trialing'))
+    LIMIT 50`;
+  for (const r of rows) {
+    const date = r.expires_at.toISOString().slice(0, 10);
+    await enqueueEmail(d.sql, d.config, { businessKey: `expiring:${r.license_id}:${date}`, templateKey: 'subscription_expiring', to: r.billing_email, vars: { licenseId: r.license_id, productSummary: r.product, expiresAt: date } });
+  }
+  return rows.length;
 }

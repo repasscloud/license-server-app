@@ -516,6 +516,23 @@ describe('customer portal and realm separation', () => {
     const rn = await dev.request(`/v1/licenses/${ids.licenseId}/renew`, { method: 'POST', json: { productId: 'cursedelete', majorVersion: 2, activation: { activationId: ids.act0, deviceId: device(1), clientSecret: ids.act0secret } } });
     expect(rn.status).toBe(409);
     expect(((await rn.json()) as any).error).toBe('activation_inactive');
+    // The organisation is told about the release (security notification).
+    expect((await sql`SELECT 1 FROM email_outbox WHERE business_key = ${'device_released:' + ids.act0}`).length).toBe(1);
+  });
+
+  it('daily tick queues a 7-day expiry notice for terms that will not auto-renew', async () => {
+    await sql`UPDATE entitlements SET expires_at = now() + interval '6 days 12 hours' WHERE id = (SELECT entitlement_id FROM licenses WHERE id = ${ids.licenseId!})`;
+    const { dailyTick } = await import('../../src/jobs/runner.ts');
+    const d = makeDeps(env);
+    try {
+      const r = await dailyTick({ ...d, log: () => {} });
+      expect(r.expiringReminders).toBeGreaterThanOrEqual(1);
+      expect((await d.sql`SELECT 1 FROM email_outbox WHERE template_key = 'subscription_expiring'`).length).toBe(1);
+      await dailyTick({ ...d, log: () => {} });
+      expect((await d.sql`SELECT 1 FROM email_outbox WHERE template_key = 'subscription_expiring'`).length).toBe(1);
+    } finally {
+      await d.sql.end();
+    }
   });
 });
 

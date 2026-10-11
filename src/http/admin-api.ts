@@ -161,7 +161,7 @@ adminApi.post('/customers', mutation(201, (c, b) => customers.createCustomer(c.g
 adminApi.get('/customers/:id', async (c) => (need(c, 'customers:read'), c.json(await customers.getCustomer(c.get('deps').sql, c.req.param('id')))));
 adminApi.patch('/customers/:id', mutation(200, (c, b) => customers.updateCustomer(c.get('deps').sql, actor(c), c.req.param('id')!, b)));
 adminApi.get('/customers/:id/entitlements', async (c) => (need(c, 'entitlements:read'), c.json({ data: await customers.listCustomerEntitlements(c.get('deps').sql, c.req.param('id')) })));
-adminApi.post('/customers/:id/members', mutation(201, (c, b) => customers.addMember(c.get('deps').sql, actor(c), c.req.param('id')!, z.string().parse(b.email), z.enum(['admin', 'billing', 'member']).parse(b.role))));
+adminApi.post('/customers/:id/members', mutation(201, (c, b) => customers.addMember(c.get('deps').sql, actor(c), c.req.param('id')!, z.string().parse(b.email), z.enum(['admin', 'billing', 'member']).parse(b.role), c.get('deps').config)));
 adminApi.delete('/customers/:id/members/:userId', mutation(200, async (c) => (await customers.removeMember(c.get('deps').sql, actor(c), c.req.param('id')!, c.req.param('userId')!), { removed: true })));
 adminApi.post('/entitlements/grants', mutation(201, async (c, b) => {
   const r = await grantEntitlements(c.get('deps').sql, c.get('deps').config, actor(c), b);
@@ -187,7 +187,7 @@ adminApi.post('/licenses/:id/activation-key/rotate', mutation(200, (c) => licens
 adminApi.get('/licenses/:id/transfers', async (c) => (need(c, 'activations:read'), c.json(await licensing.transferStatus(c.get('deps').sql, c.req.param('id')))));
 adminApi.post('/licenses/:id/transfers/grant', mutation(200, (c, b) => licensing.grantTransfers(c.get('deps').sql, actor(c), c.req.param('id')!, z.number().int().parse(b.amount), z.string().parse(b.reason))));
 adminApi.post('/licenses/:id/transfers/reset', mutation(200, (c, b) => licensing.resetTransfers(c.get('deps').sql, actor(c), c.req.param('id')!, z.string().parse(b.reason))));
-adminApi.post('/activations/:id/release', mutation(200, (c) => licensing.releaseActivation(c.get('deps').sql, actor(c), c.req.param('id')!, 'support')));
+adminApi.post('/activations/:id/release', mutation(200, (c) => licensing.releaseActivation(c.get('deps').sql, actor(c), c.req.param('id')!, 'support', c.get('deps').config)));
 
 // --- billing ---------------------------------------------------------------------------------
 adminApi.get('/checkouts', async (c) => (need(c, 'checkouts:read'), c.json(list(await listCheckouts(c.get('deps').sql, { status: q(c, 'status'), limit: page(c).limit }), c))));
@@ -278,7 +278,7 @@ adminApi.post('/tokens', mutation(201, (c, b) => admins.createApiToken(c.get('de
 adminApi.post('/tokens/:id/revoke', mutation(200, (c, b) => admins.revokeApiToken(c.get('deps').sql, actor(c), c.req.param('id')!, typeof b.reason === 'string' ? b.reason : 'revoked via API')));
 adminApi.post('/tokens/:id/rotate', mutation(201, (c, b) => admins.rotateApiToken(c.get('deps').sql, c.get('deps').config, actor(c), c.req.param('id')!, { expiresInDays: typeof b.expiresInDays === 'number' ? b.expiresInDays : undefined })));
 adminApi.get('/admins', async (c) => (need(c, 'admins:manage'), c.json({ data: await admins.listAdmins(c.get('deps').sql) })));
-adminApi.post('/admins', mutation(201, (c, b) => admins.inviteAdmin(c.get('deps').sql, actor(c), b)));
+adminApi.post('/admins', mutation(201, (c, b) => admins.inviteAdmin(c.get('deps').sql, actor(c), b, c.get('deps').config)));
 adminApi.put('/admins/:id/roles', mutation(200, (c, b) => admins.setAdminRoles(c.get('deps').sql, actor(c), c.req.param('id')!, z.array(z.string()).parse(b.roles))));
 adminApi.post('/admins/:id/status', mutation(200, (c, b) => (confirm(b, c.req.param('id')!), admins.setAdminStatus(c.get('deps').sql, actor(c), c.req.param('id')!, z.enum(['active', 'disabled']).parse(b.status)))));
 adminApi.post('/admins/:id/reset-mfa', mutation(200, async (c, b) => (confirm(b, c.req.param('id')!), await admins.resetAdminTotp(c.get('deps').sql, actor(c), c.req.param('id')!), { reset: true })));
