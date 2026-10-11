@@ -1,5 +1,5 @@
 // TEST DOUBLES for Stripe and MailerSend. They implement only the endpoints this server calls,
-// with the request/response shapes of the pinned Stripe API version (2026-08-26.dahlia) and the
+// with the request/response shapes of the pinned Stripe API version (2026-09-30.endive) and the
 // MailerSend v1 email API. They exist so the full commerce flow can be exercised without real
 // accounts; they are NOT evidence that the real providers accept these requests (see
 // docs/STATUS.md for what still needs a live test-mode run).
@@ -66,7 +66,7 @@ export class FakeStripe {
 
   readonly webhookSecret: string;
   readonly apiVersion: string;
-  constructor(webhookSecret: string, apiVersion = '2026-08-26.dahlia') {
+  constructor(webhookSecret: string, apiVersion = '2026-09-30.endive') {
     this.webhookSecret = webhookSecret;
     this.apiVersion = apiVersion;
   }

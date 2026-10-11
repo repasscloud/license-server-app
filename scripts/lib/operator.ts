@@ -11,7 +11,7 @@ export function operatorEnv(): Env {
     MAIL_FROM_EMAIL: e.MAIL_FROM_EMAIL ?? 'hello@repasscloud.com',
     MAIL_FROM_NAME: e.MAIL_FROM_NAME ?? 'RePassCloud Licensing',
     SUPPORT_EMAIL: e.SUPPORT_EMAIL ?? 'hello@repasscloud.com',
-    STRIPE_API_VERSION: e.STRIPE_API_VERSION ?? '2026-08-26.dahlia',
+    STRIPE_API_VERSION: e.STRIPE_API_VERSION ?? '2026-09-30.endive',
     SIGNING_KEK_ACTIVE_VERSION: e.SIGNING_KEK_ACTIVE_VERSION ?? '1',
     APP_DATA_KEY_ACTIVE_VERSION: e.APP_DATA_KEY_ACTIVE_VERSION ?? '1',
     MAIL_TRANSPORT: 'disabled',

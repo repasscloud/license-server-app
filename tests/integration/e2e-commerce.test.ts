@@ -193,7 +193,7 @@ describe('catalogue onboarding through the admin API (no redeploy, data only)', 
     const req = stripe.requests.find((r) => r.path === '/v1/prices' && r.params.unit_amount === '4900')!;
     expect(req.params).toMatchObject({ currency: 'aud', recurring: { interval: 'year', interval_count: '1' }, tax_behavior: 'exclusive' });
     expect(req.idempotencyKey).toBe(`repass-price-${ids['price_cd2-business-annual']}`);
-    expect(req.stripeVersion).toBe('2026-08-26.dahlia');
+    expect(req.stripeVersion).toBe('2026-09-30.endive');
     // Queued sync jobs are idempotent (Stripe idempotency key) and complete cleanly.
     await drain();
     expect(stripe.prices.size).toBe(4);

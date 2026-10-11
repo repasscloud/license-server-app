@@ -62,7 +62,7 @@ Reproduce with `npm run secrets:scan && npm run lint && npm run typecheck && npm
 
 - **Signing keys are decrypted inside the Worker.** This is application-level envelope encryption, **not** an HSM/KMS (ADR-0003).
 - **Admin MFA is TOTP.** Passkeys/WebAuthn and dual approval for key operations are not implemented (ADR-0004). Cloudflare Access in front of `/admin*` is recommended.
-- **Stripe API version is pinned to `2026-08-26.dahlia`;** `2026-09-30.endive` has not been reviewed (ADR-0005).
+- **Stripe API version is pinned to `2026-09-30.endive`** (reviewed against the endive changelog; see ADR-0005). It is still unverified against real Stripe until the test-mode purchase.
 - **The MailerSend message-ID location is ambiguous in their docs.** Both documented paths are accepted. Delivery tracking exists only if the webhook secret is configured.
 - **Uncertain email sends** (timeouts) are not resent automatically; an operator resolves them.
 - **Hyperdrive caching must be disabled** on the configuration (deployment runbook). The code cannot enforce this.
@@ -79,7 +79,7 @@ Reproduce with `npm run secrets:scan && npm run lint && npm run typecheck && npm
 4. Deploy to staging, then production via the manual workflow. Confirm custom domain only, `workers.dev` disabled, Preview URLs disabled.
 5. Run `admin:bootstrap` for the first super administrator.
 6. Generate, publish and hand over signing keys. Record trust and mark them eligible once the client release that trusts them is the minimum supported.
-7. Stripe: test-mode webhook endpoint (events listed in the deployment runbook, API version `2026-08-26.dahlia`), Customer Portal, Stripe Tax if used. Run a **real test-mode purchase end to end** to close the "not verified" rows above.
+7. Stripe: test-mode webhook endpoint (events listed in the deployment runbook, API version `2026-09-30.endive`), Customer Portal, Stripe Tax if used. Run a **real test-mode purchase end to end** to close the "not verified" rows above.
 8. MailerSend: verify the domain, create a scoped token, and optionally the delivery webhook. Send a real test email (portal login) to close the email row.
 9. Watch Workers Logs `cpuTime` / `exceededCpu` for a week and decide on Workers Paid only if needed.
 10. Pin the CI `setup-node` action to a SHA, enable branch protection, and add reviewers to the `production` environment.

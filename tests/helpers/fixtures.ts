@@ -22,7 +22,7 @@ export function testEnv(overrides: Partial<Env> = {}): Env {
     MAIL_FROM_EMAIL: 'licensing@example.test',
     MAIL_FROM_NAME: 'Test',
     SUPPORT_EMAIL: 'support@example.test',
-    STRIPE_API_VERSION: '2026-08-26.dahlia',
+    STRIPE_API_VERSION: '2026-09-30.endive',
     SIGNING_KEK_ACTIVE_VERSION: '1',
     APP_DATA_KEY_ACTIVE_VERSION: '1',
     MAIL_TRANSPORT: 'capture',
