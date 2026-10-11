@@ -32,3 +32,4 @@ postgres-data/
 *.pfx
 # Legacy local scratch script (pre-rewrite), intentionally untracked
 scripts/test-publish.sh
+worker-configuration.d.ts

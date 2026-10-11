@@ -459,3 +459,25 @@ export function licenceFileName(template: string, ctx: { productSlug: string; ma
     .replace('{licenseId}', ctx.licenseId)
     .replace(/[^A-Za-z0-9_.-]/g, '_');
 }
+
+/**
+ * Licence file for download (portal/admin). Re-signs when the entitlement changed since the last
+ * signing; for an expired subscription returns the last validly signed artifact (ADR-0001 §4).
+ */
+export async function licenseFileForDownload(sql: Sql, config: Config, actor: Actor, licenseId: string, now = new Date()): Promise<{ fileName: string; envelope: Envelope }> {
+  return sql.begin(async (tx) => {
+    const ctx = await lockLicense(tx, licenseId);
+    if (ctx.status === 'revoked') throw new AppError('forbidden', 'This licence has been revoked.');
+    let envelope: Envelope;
+    try {
+      envelope = await currentOrFreshLicense(tx, config, ctx, actor, 'download', now);
+    } catch (e) {
+      if (e instanceof LicensingRefusal && e.code === 'subscription_expired' && ctx.currentEnvelope) envelope = ctx.currentEnvelope;
+      else if (e instanceof LicensingRefusal) throw new AppError('precondition_failed', e.message);
+      else throw e;
+    }
+    const [m] = await tx<{ licence_file_name_template: string }[]>`SELECT licence_file_name_template FROM product_majors WHERE id = ${ctx.productMajorId}`;
+    await audit(tx, actor, { action: 'license.downloaded', resourceType: 'license', resourceId: licenseId });
+    return { fileName: licenceFileName(m!.licence_file_name_template, { productSlug: ctx.productSlug, majorVersion: ctx.majorVersion, edition: ctx.policy.edition.wireId, licenseId }), envelope };
+  });
+}

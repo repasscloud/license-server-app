@@ -10,8 +10,8 @@
   },
   "scripts": {
     "dev": "wrangler dev",
-    "build": "wrangler deploy --dry-run --outdir dist",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "npm run types --silent && wrangler deploy --dry-run --outdir dist",
+    "typecheck": "npm run types --silent && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "lint": "eslint .",
     "test": "vitest run --project unit --project integration",
     "test:unit": "vitest run --project unit",
@@ -25,7 +25,8 @@
     "admin:bootstrap": "node scripts/bootstrap-admin.ts",
     "keys:import-test-vectors": "node scripts/import-test-vector-keys.ts",
     "secrets:scan": "node scripts/scan-secrets.mjs",
-    "deploy": "wrangler deploy --env production"
+    "deploy": "wrangler deploy --env production",
+    "types": "wrangler types --include-env=false"
   },
   "dependencies": {
     "hono": "4.13.13",
