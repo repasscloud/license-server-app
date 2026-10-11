@@ -453,7 +453,7 @@ adminUi.post('/offers', action(async (c, f) => {
     sku: f.sku, name: f.name, description: f.description ?? '', kind: components.length > 1 ? 'bundle' : 'single', billing: f.billing, visibility: f.visibility,
     maxQuantity: Number(f.maxQuantity || 1), customerKind: f.customerKind, allowPromotionCodes: bool(f.allowPromotionCodes), automaticTax: bool(f.automaticTax), taxIdCollection: bool(f.taxIdCollection), components,
   });
-  return back(c, `/admin/offers/${(o as unknown as { id: string }).id}`, 'Offer created as draft. Add a price, sync it to Stripe, then activate.');
+  return back(c, `/admin/offers/${(o as unknown as { id: string }).id}`, 'Offer created as draft. Link its Stripe product, set prices in every currency, then activate.');
 }));
 
 adminUi.get('/offers/:id', async (c) => {
@@ -464,13 +464,24 @@ adminUi.get('/offers/:id', async (c) => {
     body: (
       <>
         <h1>{o.name} <code>{o.sku}</code> <Badge v={o.status} /></h1>
-        <p class="muted">{o.kind} · {o.billing} · Stripe product: <code>{String(o.stripeProduct?.stripe_product_id ?? 'not synced')}</code> {o.stripeProduct ? <Badge v={String(o.stripeProduct.sync_state)} /> : null}</p>
+        <p class="muted">{o.kind} · {o.billing} · Stripe product: <code>{String(o.stripeProduct?.stripe_product_id ?? 'not linked')}</code>
+          {o.stripeProduct?.stripe_product_id ? <> {String(o.stripeProduct.synced_name ?? '')} <Badge v={String(o.stripeProduct.sync_state)} /></> : null}</p>
+        {o.status !== 'archived' && !o.stripeProduct?.stripe_product_id ? <div class="flash err" role="alert">Not sellable: link the Stripe product (prod_…) that holds this offer's name, description and image for Checkout.</div> : null}
+        {o.stripeProduct?.stripe_product_id && o.stripeProduct.sync_state === 'failed' ? <div class="flash err" role="alert">Stripe product problem: {String(o.stripeProduct.last_error ?? 'unknown')}</div> : null}
+        {can(c, 'products:write') && o.status !== 'archived' ? (
+          <form class="card" method="post" action={`/admin/offers/${o.id}/stripe-product`}><Csrf token={c.get('csrf')} />
+            <label for="spid">Stripe product ID</label>
+            <div class="row"><input id="spid" name="stripeProductId" required pattern="prod_[A-Za-z0-9]+" placeholder="prod_…" value={String(o.stripeProduct?.stripe_product_id ?? '')} />
+              <button type="submit">{o.stripeProduct?.stripe_product_id ? 'Relink' : 'Link'} Stripe product</button></div>
+            <p class="muted">Create the product in Stripe (name, description, image), then paste its ID. Prices stay in this database and are sent to Checkout against this product; the server never creates or renames Stripe products.</p>
+          </form>
+        ) : null}
         {can(c, 'products:write') ? (
           <div class="card">
             {['active', 'archived', 'draft'].filter((s) => s !== o.status).map((s) => (
               <form class="inline" method="post" action={`/admin/offers/${o.id}/status`}><Csrf token={c.get('csrf')} /><input type="hidden" name="status" value={s} /><button class={s === 'archived' ? 'danger' : ''} type="submit">{s === 'active' ? 'Activate (publish)' : s === 'archived' ? 'Archive' : 'Back to draft'}</button></form>
             ))}
-            {can(c, 'stripe:sync') ? <form class="inline" method="post" action={`/admin/offers/${o.id}/sync`}><Csrf token={c.get('csrf')} /><button class="secondary" type="submit">Sync product to Stripe now</button></form> : null}
+            {can(c, 'stripe:sync') ? <form class="inline" method="post" action={`/admin/offers/${o.id}/sync`}><Csrf token={c.get('csrf')} /><button class="secondary" type="submit">Verify Stripe product</button></form> : null}
           </div>
         ) : null}
         <h2>Entitlement components</h2>
@@ -511,7 +522,11 @@ adminUi.post('/offers/:id/status', action(async (c, f) => {
 adminUi.post('/offers/:id/sync', action(async (c) => {
   if (!c.get('actor').permissions?.has('stripe:sync')) throw new AppError('forbidden', 'Missing permission stripe:sync');
   await stripeSync.syncOffer(c.get('deps').sql, c.get('deps').stripe, c.req.param('id')!, c.get('actor'));
-  return back(c, `/admin/offers/${c.req.param('id')}`, 'Stripe product synced');
+  return back(c, `/admin/offers/${c.req.param('id')}`, 'Stripe product verified');
+}));
+adminUi.post('/offers/:id/stripe-product', action(async (c, f) => {
+  const r = await stripeSync.linkStripeProduct(c.get('deps').sql, c.get('deps').stripe, c.get('actor'), c.req.param('id')!, { stripeProductId: f.stripeProductId });
+  return back(c, `/admin/offers/${r.offerId}`, `Linked Stripe product ${r.stripeProductId} (${r.stripeProductName})`);
 }));
 adminUi.post('/offers/:id/prices', action(async (c, f) => {
   const offerId = c.req.param('id')!;

@@ -1121,12 +1121,96 @@
         }
       }
     },
+    "/api/admin/v1/offers/{id}/stripe-product": {
+      "put": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Link the offer (id or SKU) to an existing Stripe product (name, description and images are managed in Stripe; the server never creates or renames products). The product must exist in this Stripe account, be active, and not be linked to another offer",
+        "description": "Requires scope `products:write`.",
+        "security": [
+          {
+            "adminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "stripeProductId": "prod_…"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/admin/v1/offers/{id}/status": {
       "post": {
         "tags": [
           "Catalogue"
         ],
-        "summary": "Activate/archive an offer (activation requires a synced price)",
+        "summary": "Activate/archive an offer (activation requires a price in every store currency and a linked, verified Stripe product)",
         "description": "Requires scope `products:write`.",
         "security": [
           {
@@ -1664,7 +1748,7 @@
         "tags": [
           "Stripe"
         ],
-        "summary": "Queue (or with wait:true, run) creation/update of an offer's Stripe product",
+        "summary": "Queue (or with wait:true, run) verification of an offer's linked Stripe product (exists and active; re-applies repass_* metadata; never creates or renames it)",
         "description": "Requires scope `stripe:sync`.",
         "security": [
           {
@@ -1696,7 +1780,7 @@
           }
         },
         "responses": {
-          "200": {
+          "201": {
             "description": "Success",
             "content": {
               "application/json": {

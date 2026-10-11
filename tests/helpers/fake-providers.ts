@@ -123,9 +123,11 @@ export class FakeStripe {
     if (method === 'POST' && (m = path.match(/^\/v1\/products\/([^/]+)$/))) {
       const o = this.products.get(m[1]!);
       if (!o) return null;
-      Object.assign(o, { name: p.name ?? o.name, active: p.active === undefined ? o.active : p.active !== 'false' });
+      Object.assign(o, { name: p.name ?? o.name, description: p.description ?? o.description, active: p.active === undefined ? o.active : p.active !== 'false',
+        metadata: { ...(o.metadata as Record<string, string>), ...(p.metadata ?? {}) } });
       return o;
     }
+    if (method === 'GET' && (m = path.match(/^\/v1\/products\/([^/]+)$/))) return this.products.get(m[1]!) ?? null;
     if (method === 'POST' && path === '/v1/prices') {
       const id = sid('price');
       const o = { id, object: 'price', active: true, currency: p.currency, unit_amount: Number(p.unit_amount), product: p.product, tax_behavior: p.tax_behavior ?? 'unspecified',
@@ -208,6 +210,14 @@ export class FakeStripe {
     if (method === 'POST' && path === '/v1/billing_portal/sessions') return { id: sid('bps'), url: `https://billing.stripe.com/p/session/${p.customer}` };
     if (method === 'GET' && path === '/v1/events') return { object: 'list', data: [] };
     return null;
+  }
+
+  /** A Product the owner created in Stripe (dashboard or catalogue script), with its image. */
+  createProductDirect(name: string, opts: { active?: boolean; description?: string } = {}): string {
+    const id = sid('prod');
+    this.products.set(id, { id, object: 'product', name, description: opts.description ?? `${name} description`, active: opts.active ?? true,
+      images: [`https://img.example.test/${id}.png`], metadata: {} });
+    return id;
   }
 
   /** A Price the owner created directly in Stripe (optionally multi-currency). */

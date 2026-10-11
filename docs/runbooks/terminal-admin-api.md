@@ -63,6 +63,8 @@ rp POST /offers/$OFFER/prices '{"prices":[
   {"currency":"CAD","unitAmount":44900},{"currency":"NZD","unitAmount":54900},{"currency":"SGD","unitAmount":43900},
   {"currency":"HKD","unitAmount":256900},{"currency":"JPY","unitAmount":49800},{"currency":"CNY","unitAmount":236900},
   {"currency":"CHF","unitAmount":28900}]}' | jq '.missingCurrencies'
+# Link the Stripe product you created in Stripe (name, description, image). The server never creates one.
+rp PUT /offers/$OFFER/stripe-product '{"stripeProductId":"prod_…"}' | jq '{sku, stripeProductId, stripeProductName}'
 rp POST /offers/$OFFER/status '{"status":"active"}' | jq '{sku, status}'
 
 # Issue (grant) an entitlement — the activation key is returned ONCE

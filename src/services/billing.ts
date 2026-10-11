@@ -173,7 +173,7 @@ export async function handleCheckoutSession(sql: Sql, config: Config, stripe: St
 
 async function fulfilCheckout(sql: Sql, config: Config, actor: Actor, checkoutId: string, session: StripeSession, now: Date): Promise<string> {
   return sql.begin(async (tx) => {
-    const [chk] = await tx<{ id: string; status: string; customer_id: string | null; email: string; quantity: number; currency: string; expected_subtotal: number; snapshot: CheckoutSnapshot; stripe_price_id: string }[]>`
+    const [chk] = await tx<{ id: string; status: string; customer_id: string | null; email: string; quantity: number; currency: string; expected_subtotal: number; snapshot: CheckoutSnapshot; stripe_price_id: string; stripe_product_id: string | null }[]>`
       SELECT * FROM checkouts WHERE id = ${checkoutId} FOR UPDATE`;
     if (!chk) throw notFound('Checkout');
     if (chk.status === 'completed') return 'duplicate: already fulfilled';
@@ -186,11 +186,13 @@ async function fulfilCheckout(sql: Sql, config: Config, actor: Actor, checkoutId
     else if (sp.stripePriceId) {
       if (line.price.id !== sp.stripePriceId) problems.push('line item price differs from snapshot');
     } else {
-      // Inline price_data: Stripe must have charged our amount, in our currency, for our product.
+      // Inline price_data: Stripe must have charged our amount, in our currency, for the product the
+      // session was opened against (recorded on the checkout; older rows use the current link).
       const [pm] = await tx<{ stripe_product_id: string | null }[]>`SELECT stripe_product_id FROM stripe_product_mappings WHERE offer_id = ${chk.snapshot.offer.id}`;
       if (line.price.unit_amount !== sp.unitAmount) problems.push(`unit amount ${line.price.unit_amount} != ${sp.unitAmount}`);
       if (line.price.currency !== undefined && line.price.currency !== sp.currency) problems.push('line currency differs');
-      if (!pm?.stripe_product_id || idOf(line.price.product ?? null) !== pm.stripe_product_id) problems.push('line item product differs');
+      const expectedProduct = chk.stripe_product_id ?? pm?.stripe_product_id ?? null;
+      if (!expectedProduct || idOf(line.price.product ?? null) !== expectedProduct) problems.push('line item product differs');
       if ((line.price.recurring?.interval ?? null) !== sp.recurringInterval) problems.push('billing interval differs');
     }
     if (line && line.quantity !== chk.quantity) problems.push('quantity differs');
