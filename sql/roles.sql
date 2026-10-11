@@ -11,7 +11,14 @@
 SELECT format('CREATE ROLE repass_runtime LOGIN PASSWORD %L', :'runtime_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'repass_runtime') \gexec
 SELECT format('ALTER ROLE repass_runtime PASSWORD %L', :'runtime_password') \gexec
-ALTER ROLE repass_runtime NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+-- CREATE ROLE already defaults to no elevated attributes. Assert it rather than ALTER, because
+-- managed hosts (Supabase) run this as a non-superuser that may not set SUPERUSER/REPLICATION/BYPASSRLS.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'repass_runtime'
+             AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)) THEN
+    RAISE EXCEPTION 'repass_runtime has elevated role attributes; remove them as a superuser first';
+  END IF;
+END $$;
 ALTER ROLE repass_runtime SET statement_timeout = '15s';
 ALTER ROLE repass_runtime SET idle_in_transaction_session_timeout = '30s';
 
