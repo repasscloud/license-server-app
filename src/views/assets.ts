@@ -18,4 +18,23 @@ button.secondary,.button.secondary{background:transparent;color:var(--accent)}bu
 .badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:.82em;border:1px solid var(--line)}.badge.ok{color:var(--ok);border-color:var(--ok)}.badge.bad{color:var(--danger);border-color:var(--danger)}.badge.warn{color:var(--warn);border-color:var(--warn)}
 .muted{color:var(--muted)}.secret{font-size:1.1em;padding:10px;display:block;margin:8px 0}details{margin:6px 0}summary{cursor:pointer;color:var(--accent)}
 @media (max-width:640px){main{padding:12px 16px}th,td{padding:5px 6px}}
+.currency-picker{display:flex;gap:8px;align-items:center;margin:0 0 16px}.currency-picker label{margin:0}.currency-picker select{width:auto}
+`;
+
+/** Store currency switcher (served from /assets/store.js; no inline script under CSP). */
+export const STORE_JS = `(() => {
+  const picker = document.querySelector('[data-currency-picker]');
+  if (!picker) return;
+  const apply = (cur) => {
+    for (const card of document.querySelectorAll('[data-offer]')) {
+      let has = false;
+      for (const p of card.querySelectorAll('[data-price]')) { const on = p.dataset.price === cur; p.hidden = !on; has = has || on; }
+      card.querySelector('[data-price-missing]').hidden = has;
+      card.querySelector('[data-currency-field]').value = cur;
+      card.querySelector('[data-buy]').disabled = !has;
+    }
+    const u = new URL(location.href); u.searchParams.set('currency', cur); history.replaceState(null, '', u);
+  };
+  picker.addEventListener('change', () => apply(picker.value));
+})();
 `;

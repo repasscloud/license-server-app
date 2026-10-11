@@ -431,7 +431,7 @@ adminUi.get('/offers', async (c) => {
               <div class="row"><div><label for="maxQuantity">Max quantity</label><input id="maxQuantity" name="maxQuantity" type="number" min="1" value="1" /></div>
                 <div><label for="customerKind">Customer kind</label><select id="customerKind" name="customerKind"><option>any</option><option>individual</option><option>organisation</option></select></div>
                 <div><label for="ovis">Visibility</label><select id="ovis" name="visibility"><option>public</option><option>private</option></select></div></div>
-              <div class="row"><label><input type="checkbox" name="allowPromotionCodes" /> Allow promotion codes</label><label><input type="checkbox" name="automaticTax" /> Stripe Tax (automatic tax)</label><label><input type="checkbox" name="taxIdCollection" /> Collect tax IDs</label></div>
+              <div class="row"><label><input type="checkbox" name="allowPromotionCodes" checked /> Allow promotion codes</label><label><input type="checkbox" name="automaticTax" /> Stripe Tax (automatic tax)</label><label><input type="checkbox" name="taxIdCollection" /> Collect tax IDs</label></div>
               <label for="odesc">Description</label><textarea id="odesc" name="description"></textarea>
               {[0, 1, 2].map(compRow)}
               <button type="submit">Create offer (draft)</button>
@@ -478,7 +478,7 @@ adminUi.get('/offers/:id', async (c) => {
         </tbody></table></div>
         <h2>Prices (immutable versions)</h2>
         <div class="table-wrap"><table><thead><tr><th>Version</th><th>Amount</th><th>Interval</th><th>Tax</th><th>Status</th><th>Stripe price</th><th>Sync</th><th></th></tr></thead><tbody>
-          {o.prices.map((p) => <tr><td><code>{String(p.id)}</code></td><td>{money(Number(p.unit_amount), String(p.currency))}</td><td>{p.recurring_interval ? `${p.recurring_interval_count} ${p.recurring_interval}` : 'one-time'}</td><td>{String(p.tax_behavior)}</td><td><Badge v={String(p.status)} /></td>
+          {o.prices.map((p) => <tr><td><code>{String(p.id)}</code></td><td>{money(Number(p.unit_amount), String(p.currency))}</td><td>{p.recurring_interval ? `${p.recurring_interval_count} ${p.recurring_interval}` : 'one-time'}</td><td>{p.tax_rate_bps ? `${String(p.tax_label)} ${Number(p.tax_rate_bps) / 100}% (added)` : String(p.tax_behavior)}</td><td><Badge v={String(p.status)} /></td>
             <td><code>{String(p.stripe_price_id ?? '—')}</code></td><td><Badge v={String(p.sync_state ?? 'pending')} />{p.sync_error ? <div class="muted">{String(p.sync_error)}</div> : null}</td>
             <td>{w && p.status === 'draft' ? <form class="inline" method="post" action={`/admin/prices/${p.id}/activate`}><Csrf token={c.get('csrf')} /><button type="submit">Activate</button></form> : null}
               {w && p.status !== 'archived' ? <form class="inline" method="post" action={`/admin/prices/${p.id}/archive`}><Csrf token={c.get('csrf')} /><button class="secondary" type="submit">Archive</button></form> : null}
@@ -486,11 +486,14 @@ adminUi.get('/offers/:id', async (c) => {
         </tbody></table></div>
         {w ? (
           <details class="card"><summary>New price version</summary><form method="post" action="/admin/prices"><Csrf token={c.get('csrf')} /><input type="hidden" name="offerId" value={o.id} />
-            <div class="row"><div><label for="currency">Currency</label><input id="currency" name="currency" pattern="[A-Za-z]{3}" value="AUD" required /></div>
+            <div class="row"><div><label for="currency">Currency</label><select id="currency" name="currency">{catalogue.STORE_CURRENCIES.map((cur) => <option value={cur}>{cur.toUpperCase()}</option>)}</select></div>
               <div><label for="unitAmount">Amount in minor units (e.g. cents)</label><input id="unitAmount" name="unitAmount" type="number" min="0" step="1" required /></div>
               {o.billing === 'recurring' ? <div><label for="ri">Interval</label><div class="row"><input id="ri" name="recurringIntervalCount" type="number" min="1" value="1" /><select name="recurringInterval"><option>month</option><option>year</option><option>week</option><option>day</option></select></div></div> : null}
-              <div><label for="taxBehavior">Tax behaviour</label><select id="taxBehavior" name="taxBehavior"><option>unspecified</option><option>exclusive</option><option>inclusive</option></select></div></div>
-            <p class="muted">Creates an immutable draft and queues creation of a matching Stripe Price. Existing purchases and subscriptions keep their historical prices.</p>
+              <div><label for="taxBehavior">Stripe tax behaviour</label><select id="taxBehavior" name="taxBehavior"><option>unspecified</option><option>exclusive</option><option>inclusive</option></select></div></div>
+            <div class="row"><div><label for="taxRatePercent">Tax % added on top (optional, e.g. 10)</label><input id="taxRatePercent" name="taxRatePercent" type="number" min="0.01" max="100" step="0.01" /></div>
+              <div><label for="taxLabel">Tax label (e.g. GST)</label><input id="taxLabel" name="taxLabel" maxlength={50} /></div>
+              <div><label for="stripePriceId">Existing Stripe price ID (optional)</label><input id="stripePriceId" name="stripePriceId" pattern="price_[A-Za-z0-9]+" placeholder="price_…" /></div></div>
+            <p class="muted">Creates an immutable draft. With a Stripe price ID, that price (made by you in Stripe; it may be multi-currency) is checked against this amount, currency and interval before it can be activated; otherwise a matching Stripe Price is created. Tax is added at checkout: 100 + GST 10% = 110. Existing purchases and subscriptions keep their historical prices.</p>
             <button type="submit">Create price version</button></form></details>
         ) : null}
       </>
@@ -508,7 +511,8 @@ adminUi.post('/offers/:id/sync', action(async (c) => {
   return back(c, `/admin/offers/${c.req.param('id')}`, 'Stripe product synced');
 }));
 adminUi.post('/prices', action(async (c, f) => {
-  const p = await catalogue.createPriceVersion(c.get('deps').sql, c.get('actor'), { offerId: f.offerId, currency: f.currency, unitAmount: Number(f.unitAmount), recurringInterval: strOrNull(f.recurringInterval), recurringIntervalCount: numOrNull(f.recurringIntervalCount), taxBehavior: f.taxBehavior });
+  const p = await catalogue.createPriceVersion(c.get('deps').sql, c.get('actor'), { offerId: f.offerId, currency: f.currency, unitAmount: Number(f.unitAmount), recurringInterval: strOrNull(f.recurringInterval), recurringIntervalCount: numOrNull(f.recurringIntervalCount), taxBehavior: f.taxBehavior,
+    stripePriceId: strOrNull(f.stripePriceId), taxRatePercent: numOrNull(f.taxRatePercent), taxLabel: strOrNull(f.taxLabel) });
   // Try to sync immediately for a responsive UI; the queued job covers failures.
   let note = 'Price created; Stripe sync queued.';
   if (can(c, 'stripe:sync')) {

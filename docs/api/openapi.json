@@ -1273,7 +1273,7 @@
         "tags": [
           "Pricing"
         ],
-        "summary": "Create a draft price version (minor units) and queue Stripe Price creation",
+        "summary": "Create a draft price version (minor units). Optional stripePriceId registers a Price you made in Stripe (verified before activation; may be multi-currency); otherwise a Stripe Price is created. Optional taxRatePercent + taxLabel add a flat tax on top at checkout. Currencies: AUD USD EUR GBP CAD NZD SGD HKD JPY CNY CHF",
         "description": "Requires scope `prices:write`.",
         "security": [
           {
@@ -1302,7 +1302,9 @@
                 "currency": "AUD",
                 "unitAmount": 4900,
                 "recurringInterval": "year",
-                "taxBehavior": "exclusive"
+                "stripePriceId": "price_…",
+                "taxRatePercent": 10,
+                "taxLabel": "GST"
               }
             }
           }

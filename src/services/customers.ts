@@ -3,7 +3,7 @@
 
 import { z } from 'zod';
 import type { Db, Sql, Tx } from '../db/client.ts';
-import { conflict, notFound } from '../lib/errors.ts';
+import { AppError, conflict, notFound } from '../lib/errors.ts';
 import { newId } from '../lib/ids.ts';
 import { requirePermission, type Actor } from './actor.ts';
 import { audit } from './audit.ts';
@@ -32,11 +32,14 @@ export const UpdateCustomerInput = z.object({
   status: z.enum(['active', 'disabled']).optional(),
 }).strict();
 
+/** Insert a customer. One customer per billing email: an existing email is a conflict. */
 export async function insertCustomer(tx: Tx, actor: Actor, input: z.infer<typeof CreateCustomerInput> & { stripeCustomerId?: string | null }): Promise<string> {
   const id = newId('cus');
-  await tx`INSERT INTO customers (id, kind, display_name, organisation_name, billing_email, tax_id, country, stripe_customer_id, marketing_consent, marketing_consent_at)
+  const inserted = await tx`INSERT INTO customers (id, kind, display_name, organisation_name, billing_email, tax_id, country, stripe_customer_id, marketing_consent, marketing_consent_at)
            VALUES (${id}, ${input.kind}, ${input.displayName}, ${input.organisationName ?? null}, ${input.billingEmail}, ${input.taxId ?? null},
-                   ${input.country ?? null}, ${input.stripeCustomerId ?? null}, ${input.marketingConsent}, ${input.marketingConsent ? new Date() : null})`;
+                   ${input.country ?? null}, ${input.stripeCustomerId ?? null}, ${input.marketingConsent}, ${input.marketingConsent ? new Date() : null})
+           ON CONFLICT (billing_email) DO NOTHING RETURNING id`;
+  if (!inserted.length) throw conflict('A customer with that email address already exists');
   // The billing contact becomes the owning portal user (passwordless; verified on first login).
   const userId = await ensurePortalUser(tx, input.billingEmail);
   await tx`INSERT INTO customer_members (customer_id, portal_user_id, role) VALUES (${id}, ${userId}, 'owner') ON CONFLICT DO NOTHING`;
@@ -67,6 +70,54 @@ export async function updateCustomer(sql: Sql, actor: Actor, id: string, raw: un
     await audit(tx, actor, { action: 'customer.updated', resourceType: 'customer', resourceId: id, detail: { fields: Object.keys(input) } });
     return getCustomer(tx, id);
   });
+}
+
+export interface StoreCustomerDetails {
+  email: string;
+  name: string;
+  /** Present for Business / Enterprise / Education purchases. */
+  organisation: { businessName: string; country: string; businessIdentifier: string | null } | null;
+}
+
+/**
+ * The single customer for an email address, created on first purchase. Details typed into the
+ * public store only FILL fields that are empty on an existing customer: an anonymous form must
+ * never overwrite another person's recorded name, organisation or tax identifier.
+ */
+export async function resolveStoreCustomer(tx: Tx, actor: Actor, d: StoreCustomerDetails): Promise<string> {
+  const email = normaliseEmail(d.email);
+  const find = async () => (await tx<{ id: string; kind: string; organisation_name: string | null; country: string | null; tax_id: string | null; status: string }[]>`
+    SELECT id, kind, organisation_name, country, tax_id, status FROM customers WHERE billing_email = ${email} FOR UPDATE`)[0];
+  let c = await find();
+  if (!c) {
+    try {
+      return await insertCustomer(tx, actor, {
+        kind: d.organisation ? 'organisation' : 'individual', displayName: d.name,
+        organisationName: d.organisation?.businessName ?? null, billingEmail: email,
+        taxId: d.organisation?.businessIdentifier ?? null, country: d.organisation?.country ?? null, marketingConsent: false,
+      });
+    } catch (e) {
+      if (!(e instanceof AppError && e.code === 'conflict')) throw e;
+      c = await find(); // created concurrently
+      if (!c) throw e;
+    }
+  }
+  if (c.status !== 'active') throw new AppError('forbidden', 'This customer account is disabled. Please contact support.');
+  if (d.organisation) {
+    const o = d.organisation;
+    const filled: string[] = [];
+    if (c.kind !== 'organisation') filled.push('kind');
+    if (!c.organisation_name) filled.push('organisationName');
+    if (!c.country) filled.push('country');
+    if (!c.tax_id && o.businessIdentifier) filled.push('taxId');
+    if (filled.length) {
+      await tx`UPDATE customers SET kind = 'organisation', organisation_name = coalesce(organisation_name, ${o.businessName}),
+               country = coalesce(country, ${o.country}), tax_id = coalesce(tax_id, ${o.businessIdentifier})
+               WHERE id = ${c.id}`;
+      await audit(tx, actor, { action: 'customer.details_filled', resourceType: 'customer', resourceId: c.id, detail: { fields: filled } });
+    }
+  }
+  return c.id;
 }
 
 export async function ensurePortalUser(db: Db, rawEmail: string): Promise<string> {

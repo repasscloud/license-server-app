@@ -188,10 +188,12 @@ async function fulfilCheckout(sql: Sql, config: Config, actor: Actor, checkoutId
       return `quarantined: ${problems.join('; ')}`;
     }
 
-    // Customer: the checkout's customer, else the Stripe customer we already know, else new.
+    // Customer: the checkout's customer (store checkouts always have one), else the Stripe
+    // customer we already know, else the customer with this email (one per email), else new.
     const stripeCustomerId = idOf(session.customer);
     let customerId = chk.customer_id;
     if (!customerId && stripeCustomerId) customerId = (await tx<{ id: string }[]>`SELECT id FROM customers WHERE stripe_customer_id = ${stripeCustomerId}`)[0]?.id ?? null;
+    if (!customerId) customerId = (await tx<{ id: string }[]>`SELECT id FROM customers WHERE billing_email = ${(session.customer_details?.email ?? chk.email).toLowerCase()}`)[0]?.id ?? null;
     const details = session.customer_details ?? { email: null, name: null };
     const businessName = details.business_name?.trim() || null;
     if (!customerId) {

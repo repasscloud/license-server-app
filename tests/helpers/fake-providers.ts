@@ -57,6 +57,8 @@ export class FakeStripe {
   products = new Map<string, Record<string, unknown>>();
   prices = new Map<string, Record<string, unknown>>();
   sessions = new Map<string, Record<string, any>>();
+  customers = new Map<string, Record<string, any>>();
+  taxRates = new Map<string, Record<string, any>>();
   subscriptions = new Map<string, Record<string, any>>();
   invoices = new Map<string, Record<string, any>>();
   charges = new Map<string, Record<string, any>>();
@@ -137,17 +139,41 @@ export class FakeStripe {
       if (method === 'POST' && p.active !== undefined) o.active = p.active === 'true';
       return o;
     }
+    if (method === 'GET' && path === '/v1/customers') {
+      return { object: 'list', data: [...this.customers.values()].filter((c) => !p.email || c.email === p.email).sort((a, b) => b.created - a.created) };
+    }
+    if (method === 'POST' && path === '/v1/customers') {
+      const id = sid('cus');
+      const o = { id, object: 'customer', email: p.email ?? null, name: p.name ?? null, address: p.address ?? null, metadata: p.metadata ?? {}, created: Math.floor(Date.now() / 1000) + this.customers.size };
+      this.customers.set(id, o);
+      return o;
+    }
+    if (method === 'POST' && path === '/v1/tax_rates') {
+      const id = sid('txr');
+      const o = { id, object: 'tax_rate', display_name: p.display_name, percentage: Number(p.percentage), inclusive: p.inclusive === 'true', active: true, metadata: p.metadata ?? {} };
+      this.taxRates.set(id, o);
+      return o;
+    }
     if (method === 'POST' && path === '/v1/checkout/sessions') {
       const id = sid('cs_test');
-      const li = (p.line_items as Array<{ price: string; quantity: string }>)[0]!;
+      const li = (p.line_items as Array<{ price: string; quantity: string; tax_rates?: string[] }>)[0]!;
       const price = this.prices.get(li.price) as Record<string, any> | undefined;
       if (!price) return null;
+      if (p.customer && !this.customers.has(p.customer)) return null;
+      const currency = p.currency ?? price.currency;
+      const unit = currency === price.currency ? price.unit_amount : price.currency_options?.[currency]?.unit_amount;
+      if (unit === undefined) return null;
       const qty = Number(li.quantity);
+      const rate = li.tax_rates?.[0] ? this.taxRates.get(li.tax_rates[0]) : undefined;
+      if (li.tax_rates?.[0] && !rate) return null;
+      const subtotal = unit * qty;
+      const tax = rate && !rate.inclusive ? Math.round((subtotal * rate.percentage) / 100) : 0;
       const o = {
         id, object: 'checkout.session', url: `https://checkout.stripe.com/c/pay/${id}`, status: 'open', payment_status: 'unpaid', mode: p.mode,
-        client_reference_id: p.client_reference_id, metadata: p.metadata ?? {}, customer: p.customer ?? null, customer_email: p.customer_email ?? null,
-        customer_details: null, currency: price.currency, amount_subtotal: price.unit_amount * qty, amount_total: price.unit_amount * qty,
-        total_details: { amount_discount: 0, amount_tax: 0 }, payment_intent: null, subscription: null, invoice: null,
+        client_reference_id: p.client_reference_id, metadata: p.metadata ?? {}, customer: p.customer ?? null,
+        customer_email: p.customer ? this.customers.get(p.customer)!.email : p.customer_email ?? null,
+        customer_details: null, currency, amount_subtotal: subtotal, amount_total: subtotal + tax,
+        total_details: { amount_discount: 0, amount_tax: tax }, payment_intent: null, subscription: null, invoice: null,
         _line_items: [{ price: { id: li.price }, quantity: qty }], _params: p,
       };
       this.sessions.set(id, o);
@@ -175,11 +201,23 @@ export class FakeStripe {
     return null;
   }
 
+  /** A Price the owner created directly in Stripe (optionally multi-currency). */
+  createPriceDirect(o: { product?: string; currency: string; unitAmount: number; recurring?: { interval: string; interval_count?: number } | null; currencyOptions?: Record<string, number> }) {
+    const product = o.product ?? sid('prod');
+    if (!this.products.has(product)) this.products.set(product, { id: product, object: 'product', name: 'Made in Stripe', active: true, metadata: {} });
+    const id = sid('price');
+    this.prices.set(id, { id, object: 'price', active: true, currency: o.currency, unit_amount: o.unitAmount, product, tax_behavior: 'unspecified',
+      recurring: o.recurring ? { interval: o.recurring.interval, interval_count: o.recurring.interval_count ?? 1 } : null, metadata: {},
+      currency_options: o.currencyOptions ? Object.fromEntries(Object.entries(o.currencyOptions).map(([c, a]) => [c, { unit_amount: a, tax_behavior: 'unspecified' }])) : undefined });
+    return { id, product };
+  }
+
   // --- simulation helpers (what Stripe would do after the customer pays) -----------------------
 
   completeSession(id: string, opts: { paymentStatus?: 'paid' | 'unpaid' | 'no_payment_required'; name?: string; businessName?: string | null; email?: string; periodDays?: number } = {}) {
     const s = this.sessions.get(id)!;
     const customer = s.customer ?? sid('cus');
+    if (!this.customers.has(customer)) this.customers.set(customer, { id: customer, object: 'customer', email: opts.email ?? s.customer_email, created: Math.floor(Date.now() / 1000) });
     s.customer = customer;
     s.status = 'complete';
     s.payment_status = opts.paymentStatus ?? (s.amount_total === 0 ? 'no_payment_required' : 'paid');

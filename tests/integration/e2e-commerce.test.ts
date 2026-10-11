@@ -73,10 +73,14 @@ async function webhook(type: string, object: Record<string, unknown>, opts: { id
   return { res, id: ev.id, json: (await res.json()) as any };
 }
 
-async function checkout(sku: string, email: string, quantity = 1, key = `ck_${Math.random().toString(36).slice(2)}aaaaaaaa`) {
+// Business name the store form sends per buyer (organisation editions require it).
+const BUSINESS: Record<string, string> = { 'it@example.org': 'Example Org Pty Ltd', 'buyer@corp.example': 'Corp', 'suite@buyer.example': 'Suite Buyer Ltd', 'mailfail@buyer.example': 'MF' };
+
+async function checkout(sku: string, email: string, quantity = 1, key = `ck_${Math.random().toString(36).slice(2)}aaaaaaaa`, extra: Record<string, string> = {}) {
   const shopper = new Client(env);
   const csrf = await shopper.csrfFrom('/store');
-  const res = await shopper.request('/checkout', { method: 'POST', form: { _csrf: csrf, sku, currency: 'aud', quantity: String(quantity), email, idempotencyKey: key, unitAmount: '1' } });
+  const res = await shopper.request('/checkout', { method: 'POST', form: { _csrf: csrf, sku, currency: 'aud', quantity: String(quantity), email, idempotencyKey: key, unitAmount: '1',
+    name: 'Jane Citizen', businessName: BUSINESS[email] ?? 'Buyer Org', country: 'AU', ...extra } });
   return { res, key, location: res.headers.get('location') ?? '' };
 }
 
@@ -631,5 +635,99 @@ describe('admin API tokens: scopes, revocation, idempotency, audit', () => {
     expect(doc.openapi).toBe('3.1.0');
     expect(Object.keys(doc.paths)).toContain('/v1/activations');
     expect(Object.keys(doc.paths).length).toBeGreaterThan(60);
+  });
+});
+
+describe('store: one customer per email, flat tax, prices registered from Stripe', () => {
+  const EMAIL = 'office@school.example';
+  const custRows = (email: string) => sql<{ id: string; organisation_name: string | null; country: string | null; tax_id: string | null; stripe_customer_id: string | null }[]>`
+    SELECT id, organisation_name, country, tax_id, stripe_customer_id FROM customers WHERE billing_email = ${email}`;
+  const sessionParams = () => stripe.requests.filter((r) => r.path === '/v1/checkout/sessions').at(-1)!.params as any;
+
+  it('registers a multi-currency Stripe price per currency, verified before it can be sold', async () => {
+    ids.offer_edu = (await ok('POST', '/offers', { sku: 'cd2-education', name: 'Education perpetual', kind: 'single', billing: 'one_time', components: [{ editionPolicyId: ids.ep_education, termType: 'perpetual' }] })).id;
+    const made = stripe.createPriceDirect({ currency: 'aud', unitAmount: 10000, currencyOptions: { usd: 7000 } });
+    const before = stripe.requests.filter((r) => r.method === 'POST' && (r.path === '/v1/prices' || r.path === '/v1/products')).length;
+    const aud = await ok('POST', '/prices', { offerId: ids.offer_edu, currency: 'AUD', unitAmount: 10000, stripePriceId: made.id, taxRatePercent: 10, taxLabel: 'GST' });
+    const usd = await ok('POST', '/prices', { offerId: ids.offer_edu, currency: 'USD', unitAmount: 7000, stripePriceId: made.id });
+    for (const p of [aud, usd]) expect((await ok('POST', '/stripe/sync', { priceVersionId: p.id, wait: true })).stripePriceId).toBe(made.id);
+    // Nothing was created in Stripe: the owner's price and product were adopted.
+    expect(stripe.requests.filter((r) => r.method === 'POST' && (r.path === '/v1/prices' || r.path === '/v1/products')).length).toBe(before);
+    const [pm] = await sql<{ stripe_product_id: string }[]>`SELECT stripe_product_id FROM stripe_product_mappings WHERE offer_id = ${ids.offer_edu!}`;
+    expect(pm!.stripe_product_id).toBe(made.product);
+    // A currency the Stripe price does not carry is drift, and cannot be activated.
+    const eur = await ok('POST', '/prices', { offerId: ids.offer_edu, currency: 'EUR', unitAmount: 6000, stripePriceId: made.id });
+    await api('POST', '/stripe/sync', { priceVersionId: eur.id, wait: true });
+    expect((await api('POST', `/prices/${eur.id}/activate`)).status).toBe(412);
+    // Same Stripe price twice for one currency, or an unsupported currency, are refused.
+    expect((await api('POST', '/prices', { offerId: ids.offer_edu, currency: 'AUD', unitAmount: 10000, stripePriceId: made.id })).status).toBe(409);
+    expect((await api('POST', '/prices', { offerId: ids.offer_edu, currency: 'XYZ', unitAmount: 100 })).status).toBe(422);
+    await ok('POST', `/prices/${aud.id}/activate`);
+    await ok('POST', `/prices/${usd.id}/activate`);
+    await ok('POST', `/offers/${ids.offer_edu}/status`, { status: 'active' });
+  });
+
+  it('shows every currency from the database, with tax added on top', async () => {
+    const html = await (await new Client(env).request('/store?currency=usd')).text();
+    expect(html).toMatch(/<option value="usd" selected/);
+    expect(html).toMatch(/data-price="usd"><b>70\.00 USD<\/b>/);
+    expect(html).toMatch(/data-price="aud" hidden=""><b>110\.00 AUD<\/b> incl\. GST/);
+    expect(html).toMatch(/100\.00 AUD \+ GST 10% \(10\.00 AUD\)/);
+    expect(html).toMatch(/name="businessName" required/); // education needs business details
+    const js = await new Client(env).request('/assets/store.js');
+    expect(js.headers.get('content-type')).toMatch(/javascript/);
+  });
+
+  it('creates one customer and one Stripe customer per email; Checkout opens on it with tax and coupons', async () => {
+    const missing = await checkout('cd2-education', EMAIL, 1, undefined, { businessName: '', country: '' });
+    expect(missing.res.status).toBe(422);
+    expect(await missing.res.text()).toMatch(/Business name and country are required/);
+
+    const first = await checkout('cd2-education', EMAIL, 1, undefined, { businessName: 'Example School', country: 'au', businessIdentifier: '51 824 753 556' });
+    expect(first.res.status).toBe(303);
+    const p = sessionParams();
+    const [c] = await custRows(EMAIL);
+    expect(c).toMatchObject({ organisation_name: 'Example School', country: 'AU', tax_id: '51 824 753 556' });
+    expect(p.customer).toBe(c!.stripe_customer_id);
+    expect(p.customer_email).toBeUndefined();
+    expect(p.currency).toBe('aud');
+    expect(p.allow_promotion_codes).toBe('true');
+    const taxRate = stripe.taxRates.get(p.line_items[0].tax_rates[0])!;
+    expect(taxRate).toMatchObject({ display_name: 'GST', percentage: 10, inclusive: false });
+    expect(stripe.sessions.get(sessionIdFrom(first.location))!.amount_total).toBe(11000);
+
+    // Second purchase attempt (USD), anonymous form with different details: same customer, nothing overwritten.
+    const second = await checkout('cd2-education', EMAIL, 1, undefined, { currency: 'usd', businessName: 'Someone Else Ltd', country: 'US' });
+    expect(second.res.status).toBe(303);
+    expect(sessionParams().customer).toBe(c!.stripe_customer_id);
+    expect(sessionParams().line_items[0].tax_rates).toBeUndefined(); // USD price has no tax
+    expect(await custRows(EMAIL)).toEqual([c]);
+    expect(stripe.requests.filter((r) => r.method === 'POST' && r.path === '/v1/customers' && r.params.email === EMAIL).length).toBe(1);
+    expect(stripe.requests.filter((r) => r.method === 'POST' && r.path === '/v1/tax_rates').length).toBe(1);
+  });
+
+  it('refuses to sell an edition the email already owns, until a subscription has expired', async () => {
+    const sid = sessionIdFrom((await checkout('cd2-education', EMAIL)).location);
+    stripe.completeSession(sid, { email: EMAIL, name: 'Office' });
+    await webhook('checkout.session.completed', stripe.publicSession(sid));
+    await drain();
+    const again = await checkout('cd2-education', EMAIL);
+    expect(again.res.status).toBe(409);
+    expect(await again.res.text()).toMatch(/already licensed to this email address/);
+    // it@example.org's Business subscription: blocked while current, allowed once expired.
+    expect((await checkout('cd2-business-annual', 'it@example.org')).res.status).toBe(409);
+    await sql`UPDATE entitlements e SET expires_at = now() - interval '1 day' FROM customers c
+              WHERE c.id = e.customer_id AND c.billing_email = 'it@example.org' AND e.term_type = 'subscription'`;
+    expect((await checkout('cd2-business-annual', 'it@example.org')).res.status).toBe(303);
+  });
+
+  it('reuses a Stripe customer that already exists for the email (shared Stripe account)', async () => {
+    const existing = { id: 'cus_from_other_project', object: 'customer', email: 'shared@buyer.example', created: 1_700_000_000 };
+    stripe.customers.set(existing.id, existing);
+    const r = await checkout('cd2-enterprise', 'shared@buyer.example', 1, undefined, { businessName: 'Shared Pty Ltd' });
+    expect(r.res.status).toBe(303);
+    expect(sessionParams().customer).toBe('cus_from_other_project');
+    expect(stripe.requests.some((x) => x.method === 'POST' && x.path === '/v1/customers' && x.params.email === 'shared@buyer.example')).toBe(false);
+    expect((await custRows('shared@buyer.example'))[0]!.stripe_customer_id).toBe('cus_from_other_project');
   });
 });

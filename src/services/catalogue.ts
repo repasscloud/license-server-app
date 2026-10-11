@@ -321,7 +321,7 @@ export const CreateOfferInput = z.object({
   availableUntil: z.coerce.date().nullable().default(null),
   minQuantity: z.number().int().min(1).default(1),
   maxQuantity: z.number().int().min(1).max(10000).default(1),
-  allowPromotionCodes: z.boolean().default(false),
+  allowPromotionCodes: z.boolean().default(true),
   automaticTax: z.boolean().default(false),
   billingAddressCollection: z.enum(['auto', 'required']).default('auto'),
   taxIdCollection: z.boolean().default(false),
@@ -469,16 +469,25 @@ export async function getOffer(db: Db, idOrSku: string) {
 // Prices: immutable versions
 // ---------------------------------------------------------------------------------------------
 
+/** Currencies the store sells in (owner decision 2026-10-12), in display order. */
+export const STORE_CURRENCIES = ['aud', 'usd', 'eur', 'gbp', 'cad', 'nzd', 'sgd', 'hkd', 'jpy', 'cny', 'chf'] as const;
+
 export const CreatePriceInput = z.object({
   offerId: z.string().min(1),
-  currency: z.string().regex(/^[A-Za-z]{3}$/).transform((s) => s.toLowerCase()),
+  currency: z.string().regex(/^[A-Za-z]{3}$/).transform((s) => s.toLowerCase())
+    .refine((c) => (STORE_CURRENCIES as readonly string[]).includes(c), { message: `Currency must be one of ${STORE_CURRENCIES.join(', ').toUpperCase()}` }),
   unitAmount: z.number().int().min(0).max(99_999_999_999),
   recurringInterval: z.enum(['day', 'week', 'month', 'year']).nullable().default(null),
   recurringIntervalCount: z.number().int().min(1).max(365).nullable().default(null),
   taxBehavior: z.enum(['inclusive', 'exclusive', 'unspecified']).default('unspecified'),
   effectiveFrom: z.coerce.date().nullable().default(null),
   effectiveUntil: z.coerce.date().nullable().default(null),
-}).strict();
+  /** Register a Price you already created in Stripe instead of having the server create one. */
+  stripePriceId: z.string().regex(/^price_[A-Za-z0-9]{1,200}$/).nullable().default(null),
+  /** Flat tax added on top of the price at checkout, e.g. 10 (%) with label "GST". */
+  taxRatePercent: z.number().gt(0).max(100).refine((n) => Math.abs(n * 100 - Math.round(n * 100)) < 1e-9, 'At most two decimal places').nullable().default(null),
+  taxLabel: z.string().trim().regex(/^[A-Za-z0-9 .()%/-]{1,50}$/).nullable().default(null),
+}).strict().refine((v) => (v.taxRatePercent === null) === (v.taxLabel === null), { message: 'taxRatePercent and taxLabel go together' });
 
 /** Create a draft price version and queue its Stripe Price creation. Never mutates history. */
 export async function createPriceVersion(sql: Sql, actor: Actor, raw: unknown) {
@@ -487,17 +496,30 @@ export async function createPriceVersion(sql: Sql, actor: Actor, raw: unknown) {
   const interval = input.recurringInterval;
   const intervalCount = interval ? (input.recurringIntervalCount ?? 1) : null;
   return sql.begin(async (tx) => {
-    const [o] = await tx<{ billing: 'one_time' | 'recurring' | 'free'; status: string }[]>`SELECT billing, status FROM offers WHERE id = ${input.offerId} FOR UPDATE`;
+    const [o] = await tx<{ billing: 'one_time' | 'recurring' | 'free'; status: string; automatic_tax: boolean }[]>`SELECT billing, status, automatic_tax FROM offers WHERE id = ${input.offerId} FOR UPDATE`;
     if (!o) throw notFound('Offer');
     if (o.status === 'archived') throw conflict('Cannot add prices to an archived offer');
+    if (input.taxRatePercent !== null && o.automatic_tax) throw invalid('This offer uses Stripe automatic tax; a flat tax rate cannot also be set');
+    if (input.stripePriceId) {
+      // A multi-currency Stripe price may back one version per currency of the same offer.
+      const taken = await tx<{ offer_id: string; currency: string; status: string }[]>`
+        SELECT pv.offer_id, pv.currency, pv.status FROM stripe_price_mappings sm JOIN price_versions pv ON pv.id = sm.price_version_id
+        WHERE sm.stripe_price_id = ${input.stripePriceId}`;
+      if (taken.some((t) => t.offer_id !== input.offerId)) throw conflict('That Stripe price is registered to a different offer');
+      if (taken.some((t) => t.currency === input.currency && t.status !== 'archived')) throw conflict(`That Stripe price is already registered for ${input.currency.toUpperCase()}`);
+    }
     const problems = validatePrice({ billing: o.billing, unitAmount: input.unitAmount, recurringInterval: interval });
     if (problems.length) throw problemsError(problems);
     const id = newId('prc');
-    await tx`INSERT INTO price_versions (id, offer_id, currency, unit_amount, recurring_interval, recurring_interval_count, tax_behavior, effective_from, effective_until, created_by)
-             VALUES (${id}, ${input.offerId}, ${input.currency}, ${input.unitAmount}, ${interval}, ${intervalCount}, ${input.taxBehavior}, ${input.effectiveFrom}, ${input.effectiveUntil}, ${actor.label})`;
-    await tx`INSERT INTO stripe_price_mappings (price_version_id, idempotency_key) VALUES (${id}, ${'repass-price-' + id})`;
+    const taxBps = input.taxRatePercent === null ? null : Math.round(input.taxRatePercent * 100);
+    await tx`INSERT INTO price_versions (id, offer_id, currency, unit_amount, recurring_interval, recurring_interval_count, tax_behavior, effective_from, effective_until, created_by, tax_rate_bps, tax_label)
+             VALUES (${id}, ${input.offerId}, ${input.currency}, ${input.unitAmount}, ${interval}, ${intervalCount}, ${input.taxBehavior}, ${input.effectiveFrom}, ${input.effectiveUntil}, ${actor.label},
+                     ${taxBps}, ${input.taxLabel})`;
+    // An imported Stripe price is verified (amount, currency, interval, product) by the sync job
+    // before it can be activated; otherwise the job creates the Stripe price.
+    await tx`INSERT INTO stripe_price_mappings (price_version_id, idempotency_key, stripe_price_id) VALUES (${id}, ${'repass-price-' + id}, ${input.stripePriceId})`;
     await enqueueJob(tx, 'stripe.sync_price', `stripe.sync_price:${id}`, { priceVersionId: id });
-    await audit(tx, actor, { action: 'price.created', resourceType: 'price_version', resourceId: id, detail: { offerId: input.offerId, currency: input.currency, unitAmount: input.unitAmount, interval, intervalCount } });
+    await audit(tx, actor, { action: 'price.created', resourceType: 'price_version', resourceId: id, detail: { offerId: input.offerId, currency: input.currency, unitAmount: input.unitAmount, interval, intervalCount, stripePriceId: input.stripePriceId, taxBps, taxLabel: input.taxLabel } });
     return getPriceVersion(tx, id);
   });
 }
@@ -566,7 +588,7 @@ export async function listPriceHistory(db: Db, offerId: string) {
 
 export interface PurchasableOffer {
   offer: { id: string; sku: string; name: string; description: string; kind: 'single' | 'bundle'; billing: 'one_time' | 'recurring' | 'free'; min_quantity: number; max_quantity: number; allow_promotion_codes: boolean; automatic_tax: boolean; billing_address_collection: 'auto' | 'required'; tax_id_collection: boolean; customer_kind: string; visibility: string };
-  price: { id: string; currency: string; unit_amount: number; recurring_interval: string | null; recurring_interval_count: number | null; tax_behavior: string; stripe_price_id: string };
+  price: { id: string; currency: string; unit_amount: number; recurring_interval: string | null; recurring_interval_count: number | null; tax_behavior: string; stripe_price_id: string; tax_rate_bps: number | null; tax_label: string | null };
   components: Array<{ componentId: string; policy: EffectivePolicy }>;
 }
 
@@ -577,7 +599,7 @@ export async function resolvePurchasable(db: Db, sku: string, currency: string, 
       AND (available_from IS NULL OR available_from <= ${now}) AND (available_until IS NULL OR available_until > ${now})`;
   if (!offer) throw notFound('Offer');
   const [price] = await db<PurchasableOffer['price'][]>`
-    SELECT pv.id, pv.currency, pv.unit_amount, pv.recurring_interval, pv.recurring_interval_count, pv.tax_behavior, sm.stripe_price_id
+    SELECT pv.id, pv.currency, pv.unit_amount, pv.recurring_interval, pv.recurring_interval_count, pv.tax_behavior, sm.stripe_price_id, pv.tax_rate_bps, pv.tax_label
     FROM price_versions pv JOIN stripe_price_mappings sm ON sm.price_version_id = pv.id
     WHERE pv.offer_id = ${offer.id} AND pv.currency = ${currency.toLowerCase()} AND pv.status = 'active'
       AND (pv.effective_from IS NULL OR pv.effective_from <= ${now}) AND (pv.effective_until IS NULL OR pv.effective_until > ${now})
@@ -595,15 +617,37 @@ export async function resolvePurchasable(db: Db, sku: string, currency: string, 
   return { offer, price, components };
 }
 
-export async function listPublicCatalogue(db: Db, now: Date) {
-  return db<{ sku: string; name: string; description: string; billing: string; kind: string; currency: string; unit_amount: number; recurring_interval: string | null; recurring_interval_count: number | null; products: string }[]>`
-    SELECT o.sku, o.name, o.description, o.billing, o.kind, pv.currency, pv.unit_amount, pv.recurring_interval, pv.recurring_interval_count,
+export interface StoreOffer {
+  sku: string; name: string; description: string; billing: string; kind: string; products: string;
+  /** Business / Enterprise / Education (or organisation-only): the store asks for business details. */
+  needsOrganisation: boolean;
+  prices: Array<{ currency: string; unitAmount: number; recurringInterval: string | null; recurringIntervalCount: number | null; taxRateBps: number | null; taxLabel: string | null }>;
+}
+
+/** Public offers with every sellable currency (database prices with a verified Stripe mapping). */
+export async function listPublicCatalogue(db: Db, now: Date): Promise<StoreOffer[]> {
+  const rows = await db<{ sku: string; name: string; description: string; billing: string; kind: string; currency: string; unit_amount: number; recurring_interval: string | null;
+    recurring_interval_count: number | null; tax_rate_bps: number | null; tax_label: string | null; products: string; needs_org: boolean }[]>`
+    SELECT o.sku, o.name, o.description, o.billing, o.kind, pv.currency, pv.unit_amount, pv.recurring_interval, pv.recurring_interval_count, pv.tax_rate_bps, pv.tax_label,
       (SELECT string_agg(p.name || ' ' || m.major_version || ' ' || ep.display_name, ' + ' ORDER BY c.position)
          FROM offer_entitlement_components c JOIN product_edition_policies ep ON ep.id = c.edition_policy_id
-         JOIN product_majors m ON m.id = ep.product_major_id JOIN products p ON p.id = m.product_id WHERE c.offer_id = o.id) AS products
+         JOIN product_majors m ON m.id = ep.product_major_id JOIN products p ON p.id = m.product_id WHERE c.offer_id = o.id) AS products,
+      (o.customer_kind = 'organisation' OR EXISTS (SELECT 1 FROM offer_entitlement_components c JOIN product_edition_policies ep ON ep.id = c.edition_policy_id
+         WHERE c.offer_id = o.id AND ep.edition_id IN ('business', 'enterprise', 'education'))) AS needs_org
     FROM offers o JOIN price_versions pv ON pv.offer_id = o.id AND pv.status = 'active'
-    JOIN stripe_price_mappings sm ON sm.price_version_id = pv.id AND sm.sync_state = 'synced'
+      AND (pv.effective_from IS NULL OR pv.effective_from <= ${now}) AND (pv.effective_until IS NULL OR pv.effective_until > ${now})
+    JOIN stripe_price_mappings sm ON sm.price_version_id = pv.id AND sm.sync_state = 'synced' AND coalesce(sm.stripe_active, true)
     WHERE o.status = 'active' AND o.visibility = 'public'
       AND (o.available_from IS NULL OR o.available_from <= ${now}) AND (o.available_until IS NULL OR o.available_until > ${now})
     ORDER BY o.name, pv.currency`;
+  const bySku = new Map<string, StoreOffer>();
+  for (const r of rows) {
+    let o = bySku.get(r.sku);
+    if (!o) {
+      o = { sku: r.sku, name: r.name, description: r.description, billing: r.billing, kind: r.kind, products: r.products, needsOrganisation: r.needs_org, prices: [] };
+      bySku.set(r.sku, o);
+    }
+    o.prices.push({ currency: r.currency, unitAmount: r.unit_amount, recurringInterval: r.recurring_interval, recurringIntervalCount: r.recurring_interval_count, taxRateBps: r.tax_rate_bps, taxLabel: r.tax_label });
+  }
+  return [...bySku.values()];
 }

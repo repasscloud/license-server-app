@@ -1,7 +1,7 @@
 /** @jsxImportSource hono/jsx */
 import type { Child, FC } from 'hono/jsx';
 
-export const Layout: FC<{ title: string; realm: 'admin' | 'customer' | 'public'; who?: string | null; csrf?: string; flash?: { kind: 'ok' | 'err'; text: string } | null; children?: Child }> = (p) => (
+export const Layout: FC<{ title: string; realm: 'admin' | 'customer' | 'public'; who?: string | null; csrf?: string; flash?: { kind: 'ok' | 'err'; text: string } | null; script?: string; children?: Child }> = (p) => (
   <html lang="en">
     <head>
       <meta charset="utf-8" />
@@ -9,6 +9,7 @@ export const Layout: FC<{ title: string; realm: 'admin' | 'customer' | 'public';
       <meta name="robots" content="noindex" />
       <title>{p.title} · RePassCloud Licensing</title>
       <link rel="stylesheet" href="/assets/app.css" />
+      {p.script ? <script src={p.script} defer></script> : null}
     </head>
     <body>
       <header class="top">

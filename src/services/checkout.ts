@@ -14,7 +14,8 @@ import { newId } from '../lib/ids.ts';
 import type { Actor } from './actor.ts';
 import { audit } from './audit.ts';
 import { loadPolicyRows, resolvePurchasable } from './catalogue.ts';
-import { normaliseEmail } from './customers.ts';
+import { normaliseEmail, resolveStoreCustomer } from './customers.ts';
+import { ensureStripeCustomer, ensureStripeTaxRate } from './stripe-sync.ts';
 
 export const CreateCheckoutInput = z.object({
   sku: z.string().regex(/^[A-Za-z0-9_.-]{1,100}$/),
@@ -23,12 +24,23 @@ export const CreateCheckoutInput = z.object({
   email: z.email().max(254).transform(normaliseEmail),
   /** Client-generated idempotency key; prevents duplicate sessions on double-submit/retry. */
   idempotencyKey: z.string().regex(/^[A-Za-z0-9_-]{16,100}$/),
+  /** Purchaser's name (the customer's display name on first purchase). */
+  name: z.string().trim().min(1).max(200).optional(),
+  /** Required for Business / Enterprise / Education; identifier (ABN, VAT, EIN…) optional. */
+  businessName: z.string().trim().max(200).optional().transform((v) => v || undefined),
+  country: z.string().trim().optional().transform((v) => (v ? v.toUpperCase() : undefined)).refine((v) => v === undefined || /^[A-Z]{2}$/.test(v), 'Country must be a two-letter code'),
+  businessIdentifier: z.string().trim().max(64).optional().transform((v) => v || undefined),
 }).strict();
+
+/** Editions sold to organisations: the store requires business name and country for these. */
+const ORGANISATION_EDITIONS = new Set(['business', 'enterprise', 'education']);
 
 export interface CheckoutSnapshot {
   version: 1;
   offer: { id: string; sku: string; name: string; kind: string; billing: string };
-  price: { id: string; currency: string; unitAmount: number; recurringInterval: string | null; recurringIntervalCount: number | null; taxBehavior: string; stripePriceId: string };
+  price: { id: string; currency: string; unitAmount: number; recurringInterval: string | null; recurringIntervalCount: number | null; taxBehavior: string; stripePriceId: string;
+    /** Flat exclusive tax added on top (e.g. 1000 = 10%), with its invoice label. */
+    taxRateBps?: number | null; taxLabel?: string | null };
   quantity: number;
   components: Array<{ componentId: string; policy: ReturnType<typeof computeEffectivePolicy> }>;
 }
@@ -63,14 +75,30 @@ export async function createCheckout(sql: Sql, config: Config, stripe: StripeCli
   const purchasable = await resolvePurchasable(sql, input.sku, input.currency, now);
   const { offer, price } = purchasable;
   if (input.quantity < offer.min_quantity || input.quantity > offer.max_quantity) throw invalid(`Quantity must be between ${offer.min_quantity} and ${offer.max_quantity}`);
-  let customerId = ctx.customerId ?? null;
-  if (customerId) {
-    const [c] = await sql<{ kind: string }[]>`SELECT kind FROM customers WHERE id = ${customerId} AND status = 'active'`;
-    if (!c) throw notFound('Customer');
-    if (offer.customer_kind !== 'any' && offer.customer_kind !== c.kind) throw invalid(`This offer is only available to ${offer.customer_kind} customers`);
-  } else if (offer.customer_kind === 'organisation') {
-    // Organisation details are collected by Checkout (business name / tax id); enforced at fulfilment.
-    customerId = null;
+  const needsOrganisation = offer.customer_kind === 'organisation' || purchasable.components.some((c) => ORGANISATION_EDITIONS.has(c.policy.edition.editionId));
+  if (needsOrganisation && (!input.businessName || !input.country)) {
+    throw invalid('Business name and country are required for Business, Enterprise and Education licences');
+  }
+  if (offer.customer_kind === 'individual' && input.businessName) throw invalid('This offer is only available to individual customers');
+  // One customer per email, created (or found) before Stripe is called, so Checkout opens on
+  // that customer with the email locked and nothing is ever duplicated.
+  const customerId = ctx.customerId ?? await sql.begin((tx) => resolveStoreCustomer(tx, actor, {
+    email: input.email, name: input.name ?? input.businessName ?? input.email.split('@')[0]!,
+    organisation: needsOrganisation ? { businessName: input.businessName!, country: input.country!, businessIdentifier: input.businessIdentifier ?? null } : null,
+  }));
+  const [cust] = await sql<{ kind: string; status: string }[]>`SELECT kind, status FROM customers WHERE id = ${customerId}`;
+  if (!cust || cust.status !== 'active') throw notFound('Customer');
+  if (offer.customer_kind !== 'any' && offer.customer_kind !== cust.kind) throw invalid(`This offer is only available to ${offer.customer_kind} customers`);
+  // Already owned: an active entitlement for the same product major + edition (an expired
+  // subscription or fixed term does not count). Upgrades are a new SKU, usually with a coupon.
+  for (const c of purchasable.components) {
+    const owned = await sql`
+      SELECT 1 FROM entitlements e JOIN product_edition_policies ep ON ep.id = e.edition_policy_id
+      WHERE e.customer_id = ${customerId} AND e.status = 'active' AND e.product_major_id = ${c.policy.major.id}
+        AND ep.edition_id = ${c.policy.edition.editionId} AND (e.expires_at IS NULL OR e.expires_at > ${now})`;
+    if (owned.length) {
+      throw conflict(`${c.policy.product.name} ${c.policy.major.majorVersion} ${c.policy.edition.displayName} is already licensed to this email address. Sign in to the customer portal to manage it, or contact us about upgrading.`);
+    }
   }
   // Quantity-adjusted policies, validated again at purchase time.
   const components = [];
@@ -84,7 +112,8 @@ export async function createCheckout(sql: Sql, config: Config, stripe: StripeCli
   const snapshot: CheckoutSnapshot = {
     version: 1,
     offer: { id: offer.id, sku: offer.sku, name: offer.name, kind: offer.kind, billing: offer.billing },
-    price: { id: price.id, currency: price.currency, unitAmount: price.unit_amount, recurringInterval: price.recurring_interval, recurringIntervalCount: price.recurring_interval_count, taxBehavior: price.tax_behavior, stripePriceId: price.stripe_price_id },
+    price: { id: price.id, currency: price.currency, unitAmount: price.unit_amount, recurringInterval: price.recurring_interval, recurringIntervalCount: price.recurring_interval_count, taxBehavior: price.tax_behavior, stripePriceId: price.stripe_price_id,
+      taxRateBps: price.tax_rate_bps, taxLabel: price.tax_label },
     quantity: input.quantity,
     components,
   };
@@ -106,13 +135,26 @@ async function startStripeSession(sql: Sql, config: Config, stripe: StripeClient
   if (!c) throw notFound('Checkout');
   const [offer] = await sql<{ allow_promotion_codes: boolean; automatic_tax: boolean; billing_address_collection: string; tax_id_collection: boolean }[]>`
     SELECT allow_promotion_codes, automatic_tax, billing_address_collection, tax_id_collection FROM offers WHERE id = ${c.snapshot.offer.id}`;
-  const [cust] = c.customer_id ? await sql<{ stripe_customer_id: string | null }[]>`SELECT stripe_customer_id FROM customers WHERE id = ${c.customer_id}` : [];
   const base = config.publicBaseUrl;
   const trialDays = Math.max(0, ...c.snapshot.components.map((x) => x.policy.term.trialDays ?? 0));
+  // Our flat tax (if any) is attached to the line item as a Stripe Tax Rate: exclusive, so the
+  // customer pays price + tax (e.g. 100 + 10% GST = 110), computed from database values.
+  const p = c.snapshot.price;
+  let taxRateId: string | null = null;
+  let stripeCustomerId: string | null = null;
+  try {
+    if (p.taxRateBps && p.taxLabel) taxRateId = await ensureStripeTaxRate(sql, stripe, p.taxLabel, p.taxRateBps);
+    if (c.customer_id) stripeCustomerId = await ensureStripeCustomer(sql, stripe, c.customer_id);
+  } catch (e) {
+    await sql`UPDATE checkouts SET status = 'failed', failure_reason = ${(e as Error).message.slice(0, 500)} WHERE id = ${c.id} AND status IN ('creating', 'failed')`;
+    if (e instanceof StripeError) throw new AppError('provider_unavailable', 'Payment provider is unavailable. Please try again shortly.');
+    throw e;
+  }
   const params: Record<string, unknown> = {
     mode: c.mode,
     client_reference_id: c.id,
-    line_items: [{ price: c.snapshot.price.stripePriceId, quantity: c.quantity }],
+    currency: c.currency,
+    line_items: [{ price: p.stripePriceId, quantity: c.quantity, ...(taxRateId ? { tax_rates: [taxRateId] } : {}) }],
     success_url: `${new URL(`/checkout/${c.id}/return`, base)}?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: new URL(`/checkout/${c.id}/cancelled`, base).toString(),
     metadata: { repass_checkout_id: c.id },
@@ -122,8 +164,9 @@ async function startStripeSession(sql: Sql, config: Config, stripe: StripeClient
   if (offer!.allow_promotion_codes) params.allow_promotion_codes = true;
   if (offer!.automatic_tax) params.automatic_tax = { enabled: true };
   if (offer!.tax_id_collection) params.tax_id_collection = { enabled: true };
-  if (cust?.stripe_customer_id) {
-    params.customer = cust.stripe_customer_id;
+  if (stripeCustomerId) {
+    // Checkout on the existing customer: the email is fixed and no new Stripe customer is made.
+    params.customer = stripeCustomerId;
     if (offer!.automatic_tax || offer!.tax_id_collection) params.customer_update = { address: 'auto', name: 'auto' };
   } else {
     params.customer_email = c.email;

@@ -27,6 +27,8 @@ export interface Env {
   MAILERSEND_WEBHOOK_SECRET?: string;
   /** Test hook: base URL override for the Stripe API (fake server in tests). Never set in production. */
   STRIPE_API_BASE?: string;
+  /** Optional Stripe customer-portal login link (https://billing.stripe.com/p/login/…), shown as a fallback. */
+  STRIPE_CUSTOMER_PORTAL_LOGIN_URL?: string;
   MAILERSEND_API_BASE?: string;
   [k: string]: unknown;
 }
@@ -49,6 +51,7 @@ export interface Config {
   supportEmail: string;
   stripeApiVersion: string;
   stripeApiBase: string;
+  stripePortalLoginUrl: string | null;
   mailerSendApiBase: string;
   mailTransport: MailTransportKind;
   secureCookies: boolean;
@@ -91,6 +94,7 @@ export function loadConfig(env: Env): Config {
     supportEmail: env.SUPPORT_EMAIL,
     stripeApiVersion: env.STRIPE_API_VERSION,
     stripeApiBase: !deployed && env.STRIPE_API_BASE ? env.STRIPE_API_BASE : 'https://api.stripe.com',
+    stripePortalLoginUrl: /^https:\/\/billing\.stripe\.com\/p\/login\/[A-Za-z0-9_]+$/.test(env.STRIPE_CUSTOMER_PORTAL_LOGIN_URL ?? '') ? env.STRIPE_CUSTOMER_PORTAL_LOGIN_URL! : null,
     mailerSendApiBase: !deployed && env.MAILERSEND_API_BASE ? env.MAILERSEND_API_BASE : 'https://api.mailersend.com',
     mailTransport,
     secureCookies: publicBaseUrl.protocol === 'https:',
