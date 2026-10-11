@@ -423,10 +423,8 @@ export async function setOfferStatus(sql: Sql, actor: Actor, id: string, status:
         JOIN product_edition_policies ep ON ep.id = c.edition_policy_id JOIN product_majors m ON m.id = ep.product_major_id JOIN products p ON p.id = m.product_id
         WHERE c.offer_id = ${id} AND (p.status <> 'active' OR m.status <> 'active')`;
       for (const i of inactive) problems.push({ rule: 'offer.product_inactive', message: `${i.slug} v${i.major_version} is not active (product ${i.ps}, major ${i.ms})` });
-      const prices = await tx<{ n: number }[]>`
-        SELECT count(*)::int AS n FROM price_versions pv JOIN stripe_price_mappings sm ON sm.price_version_id = pv.id
-        WHERE pv.offer_id = ${id} AND pv.status = 'active' AND sm.sync_state = 'synced'`;
-      if (prices[0]!.n === 0) problems.push({ rule: 'offer.price', message: 'Offer needs an active price with a synced Stripe mapping' });
+      const missing = await missingCurrencies(tx, id);
+      if (missing.length) problems.push({ rule: 'offer.price', message: `Offer needs an active price in every store currency; missing ${missing.join(', ').toUpperCase()}` });
       if (problems.length) throw new AppError('precondition_failed', problems.map((p) => p.message).join('; '), { problems });
     }
     await tx`UPDATE offers SET status = ${status} WHERE id = ${id}`;
@@ -458,9 +456,7 @@ export async function getOffer(db: Db, idOrSku: string) {
     JOIN product_majors m ON m.id = ep.product_major_id JOIN products p ON p.id = m.product_id
     WHERE c.offer_id = ${o.id as string} ORDER BY c.position`;
   const prices = await db<Record<string, unknown>[]>`
-    SELECT pv.*, sm.stripe_price_id, sm.sync_state, sm.last_error AS sync_error, sm.stripe_active, sm.last_synced_at
-    FROM price_versions pv LEFT JOIN stripe_price_mappings sm ON sm.price_version_id = pv.id
-    WHERE pv.offer_id = ${o.id as string} ORDER BY pv.created_at DESC`;
+    SELECT pv.* FROM price_versions pv WHERE pv.offer_id = ${o.id as string} ORDER BY pv.created_at DESC`;
   const [stripeProduct] = await db<Record<string, unknown>[]>`SELECT * FROM stripe_product_mappings WHERE offer_id = ${o.id as string}`;
   return { ...o, components, prices, stripeProduct: stripeProduct ?? null };
 }
@@ -482,76 +478,66 @@ export const CreatePriceInput = z.object({
   taxBehavior: z.enum(['inclusive', 'exclusive', 'unspecified']).default('unspecified'),
   effectiveFrom: z.coerce.date().nullable().default(null),
   effectiveUntil: z.coerce.date().nullable().default(null),
-  /** Register a Price you already created in Stripe instead of having the server create one. */
-  stripePriceId: z.string().regex(/^price_[A-Za-z0-9]{1,200}$/).nullable().default(null),
   /** Flat tax added on top of the price at checkout, e.g. 10 (%) with label "GST". */
   taxRatePercent: z.number().gt(0).max(100).refine((n) => Math.abs(n * 100 - Math.round(n * 100)) < 1e-9, 'At most two decimal places').nullable().default(null),
   taxLabel: z.string().trim().regex(/^[A-Za-z0-9 .()%/-]{1,50}$/).nullable().default(null),
 }).strict().refine((v) => (v.taxRatePercent === null) === (v.taxLabel === null), { message: 'taxRatePercent and taxLabel go together' });
 
-/** Create a draft price version and queue its Stripe Price creation. Never mutates history. */
+/**
+ * Create a draft price version. Prices live only in the database: Checkout sends the amount to
+ * Stripe inline (price_data) from the version the buyer was shown. Never mutates history.
+ */
 export async function createPriceVersion(sql: Sql, actor: Actor, raw: unknown) {
   requirePermission(actor, 'prices:write');
   const input = CreatePriceInput.parse(raw);
+  return sql.begin(async (tx) => getPriceVersion(tx, await insertPriceVersion(tx, actor, input)));
+}
+
+async function insertPriceVersion(tx: Tx, actor: Actor, input: z.infer<typeof CreatePriceInput>): Promise<string> {
   const interval = input.recurringInterval;
   const intervalCount = interval ? (input.recurringIntervalCount ?? 1) : null;
-  return sql.begin(async (tx) => {
-    const [o] = await tx<{ billing: 'one_time' | 'recurring' | 'free'; status: string; automatic_tax: boolean }[]>`SELECT billing, status, automatic_tax FROM offers WHERE id = ${input.offerId} FOR UPDATE`;
-    if (!o) throw notFound('Offer');
-    if (o.status === 'archived') throw conflict('Cannot add prices to an archived offer');
-    if (input.taxRatePercent !== null && o.automatic_tax) throw invalid('This offer uses Stripe automatic tax; a flat tax rate cannot also be set');
-    if (input.stripePriceId) {
-      // A multi-currency Stripe price may back one version per currency of the same offer.
-      const taken = await tx<{ offer_id: string; currency: string; status: string }[]>`
-        SELECT pv.offer_id, pv.currency, pv.status FROM stripe_price_mappings sm JOIN price_versions pv ON pv.id = sm.price_version_id
-        WHERE sm.stripe_price_id = ${input.stripePriceId}`;
-      if (taken.some((t) => t.offer_id !== input.offerId)) throw conflict('That Stripe price is registered to a different offer');
-      if (taken.some((t) => t.currency === input.currency && t.status !== 'archived')) throw conflict(`That Stripe price is already registered for ${input.currency.toUpperCase()}`);
-    }
-    const problems = validatePrice({ billing: o.billing, unitAmount: input.unitAmount, recurringInterval: interval });
-    if (problems.length) throw problemsError(problems);
-    const id = newId('prc');
-    const taxBps = input.taxRatePercent === null ? null : Math.round(input.taxRatePercent * 100);
-    await tx`INSERT INTO price_versions (id, offer_id, currency, unit_amount, recurring_interval, recurring_interval_count, tax_behavior, effective_from, effective_until, created_by, tax_rate_bps, tax_label)
-             VALUES (${id}, ${input.offerId}, ${input.currency}, ${input.unitAmount}, ${interval}, ${intervalCount}, ${input.taxBehavior}, ${input.effectiveFrom}, ${input.effectiveUntil}, ${actor.label},
-                     ${taxBps}, ${input.taxLabel})`;
-    // An imported Stripe price is verified (amount, currency, interval, product) by the sync job
-    // before it can be activated; otherwise the job creates the Stripe price.
-    await tx`INSERT INTO stripe_price_mappings (price_version_id, idempotency_key, stripe_price_id) VALUES (${id}, ${'repass-price-' + id}, ${input.stripePriceId})`;
-    await enqueueJob(tx, 'stripe.sync_price', `stripe.sync_price:${id}`, { priceVersionId: id });
-    await audit(tx, actor, { action: 'price.created', resourceType: 'price_version', resourceId: id, detail: { offerId: input.offerId, currency: input.currency, unitAmount: input.unitAmount, interval, intervalCount, stripePriceId: input.stripePriceId, taxBps, taxLabel: input.taxLabel } });
-    return getPriceVersion(tx, id);
-  });
+  const [o] = await tx<{ billing: 'one_time' | 'recurring' | 'free'; status: string; automatic_tax: boolean }[]>`SELECT billing, status, automatic_tax FROM offers WHERE id = ${input.offerId} FOR UPDATE`;
+  if (!o) throw notFound('Offer');
+  if (o.status === 'archived') throw conflict('Cannot add prices to an archived offer');
+  if (input.taxRatePercent !== null && o.automatic_tax) throw invalid('This offer uses Stripe automatic tax; a flat tax rate cannot also be set');
+  const problems = validatePrice({ billing: o.billing, unitAmount: input.unitAmount, recurringInterval: interval });
+  if (problems.length) throw problemsError(problems);
+  const id = newId('prc');
+  const taxBps = input.taxRatePercent === null ? null : Math.round(input.taxRatePercent * 100);
+  await tx`INSERT INTO price_versions (id, offer_id, currency, unit_amount, recurring_interval, recurring_interval_count, tax_behavior, effective_from, effective_until, created_by, tax_rate_bps, tax_label)
+           VALUES (${id}, ${input.offerId}, ${input.currency}, ${input.unitAmount}, ${interval}, ${intervalCount}, ${input.taxBehavior}, ${input.effectiveFrom}, ${input.effectiveUntil}, ${actor.label},
+                   ${taxBps}, ${input.taxLabel})`;
+  await audit(tx, actor, { action: 'price.created', resourceType: 'price_version', resourceId: id, detail: { offerId: input.offerId, currency: input.currency, unitAmount: input.unitAmount, interval, intervalCount, taxBps, taxLabel: input.taxLabel } });
+  return id;
 }
 
 /**
  * Make a price version the sellable price. Atomically archives the previously active price for
  * the same offer/currency/interval (it stays referenced by historical purchases/subscriptions;
- * existing Stripe subscriptions keep their price). Requires a synced Stripe mapping.
+ * existing Stripe subscriptions keep the amount they were bought at).
  */
 export async function activatePriceVersion(sql: Sql, actor: Actor, id: string) {
   requirePermission(actor, 'prices:write');
-  return sql.begin(async (tx) => {
-    const [pv] = await tx<{ offer_id: string; currency: string; recurring_interval: string | null; recurring_interval_count: number | null; status: string; sync_state: string | null }[]>`
-      SELECT pv.offer_id, pv.currency, pv.recurring_interval, pv.recurring_interval_count, pv.status, sm.sync_state
-      FROM price_versions pv LEFT JOIN stripe_price_mappings sm ON sm.price_version_id = pv.id WHERE pv.id = ${id} FOR UPDATE OF pv`;
-    if (!pv) throw notFound('Price version');
-    if (pv.status === 'active') return getPriceVersion(tx, id);
-    if (pv.status === 'archived') throw conflict('Archived prices cannot be reactivated; create a new price version');
-    if (pv.sync_state !== 'synced') throw new AppError('precondition_failed', `Stripe mapping is ${pv.sync_state ?? 'missing'}; sync it before activating`);
-    const previous = await tx<{ id: string }[]>`
-      SELECT id FROM price_versions WHERE offer_id = ${pv.offer_id} AND currency = ${pv.currency} AND status = 'active'
-        AND coalesce(recurring_interval, '') = ${pv.recurring_interval ?? ''} AND coalesce(recurring_interval_count, 0) = ${pv.recurring_interval_count ?? 0}
-      FOR UPDATE`;
-    for (const p of previous) {
-      await tx`UPDATE price_versions SET status = 'archived', effective_until = coalesce(effective_until, now()) WHERE id = ${p.id}`;
-      await enqueueJob(tx, 'stripe.archive_price', `stripe.archive_price:${p.id}`, { priceVersionId: p.id });
-      await audit(tx, actor, { action: 'price.archived', resourceType: 'price_version', resourceId: p.id, detail: { supersededBy: id } });
-    }
-    await tx`UPDATE price_versions SET status = 'active', supersedes_id = ${previous[0]?.id ?? null}, effective_from = coalesce(effective_from, now()) WHERE id = ${id}`;
-    await audit(tx, actor, { action: 'price.activated', resourceType: 'price_version', resourceId: id, detail: { supersedes: previous.map((p) => p.id) } });
-    return getPriceVersion(tx, id);
-  });
+  return sql.begin((tx) => activateInTx(tx, actor, id));
+}
+
+async function activateInTx(tx: Tx, actor: Actor, id: string) {
+  const [pv] = await tx<{ offer_id: string; currency: string; recurring_interval: string | null; recurring_interval_count: number | null; status: string }[]>`
+    SELECT pv.offer_id, pv.currency, pv.recurring_interval, pv.recurring_interval_count, pv.status FROM price_versions pv WHERE pv.id = ${id} FOR UPDATE`;
+  if (!pv) throw notFound('Price version');
+  if (pv.status === 'active') return getPriceVersion(tx, id);
+  if (pv.status === 'archived') throw conflict('Archived prices cannot be reactivated; create a new price version');
+  const previous = await tx<{ id: string }[]>`
+    SELECT id FROM price_versions WHERE offer_id = ${pv.offer_id} AND currency = ${pv.currency} AND status = 'active'
+      AND coalesce(recurring_interval, '') = ${pv.recurring_interval ?? ''} AND coalesce(recurring_interval_count, 0) = ${pv.recurring_interval_count ?? 0}
+    FOR UPDATE`;
+  for (const p of previous) {
+    await tx`UPDATE price_versions SET status = 'archived', effective_until = coalesce(effective_until, now()) WHERE id = ${p.id}`;
+    await audit(tx, actor, { action: 'price.archived', resourceType: 'price_version', resourceId: p.id, detail: { supersededBy: id } });
+  }
+  await tx`UPDATE price_versions SET status = 'active', supersedes_id = ${previous[0]?.id ?? null}, effective_from = coalesce(effective_from, now()) WHERE id = ${id}`;
+  await audit(tx, actor, { action: 'price.activated', resourceType: 'price_version', resourceId: id, detail: { supersedes: previous.map((p) => p.id) } });
+  return getPriceVersion(tx, id);
 }
 
 export async function archivePriceVersion(sql: Sql, actor: Actor, id: string) {
@@ -561,7 +547,6 @@ export async function archivePriceVersion(sql: Sql, actor: Actor, id: string) {
     if (!pv) throw notFound('Price version');
     if (pv.status !== 'archived') {
       await tx`UPDATE price_versions SET status = 'archived', effective_until = coalesce(effective_until, now()) WHERE id = ${id}`;
-      await enqueueJob(tx, 'stripe.archive_price', `stripe.archive_price:${id}`, { priceVersionId: id });
       await audit(tx, actor, { action: 'price.archived', resourceType: 'price_version', resourceId: id });
     }
     return getPriceVersion(tx, id);
@@ -570,16 +555,56 @@ export async function archivePriceVersion(sql: Sql, actor: Actor, id: string) {
 
 export async function getPriceVersion(db: Db, id: string) {
   const [p] = await db<Record<string, unknown>[]>`
-    SELECT pv.*, sm.stripe_price_id, sm.sync_state, sm.last_error AS sync_error, sm.stripe_active
-    FROM price_versions pv LEFT JOIN stripe_price_mappings sm ON sm.price_version_id = pv.id WHERE pv.id = ${id}`;
+    SELECT pv.* FROM price_versions pv WHERE pv.id = ${id}`;
   if (!p) throw notFound('Price version');
   return p;
 }
 
+/** Store currencies without an active price for this offer (all must be set before it sells). */
+export async function missingCurrencies(db: Db, offerId: string, now = new Date()): Promise<string[]> {
+  const rows = await db<{ currency: string }[]>`
+    SELECT DISTINCT currency FROM price_versions WHERE offer_id = ${offerId} AND status = 'active'
+      AND (effective_from IS NULL OR effective_from <= ${now}) AND (effective_until IS NULL OR effective_until > ${now})`;
+  const have = new Set(rows.map((r) => r.currency));
+  return STORE_CURRENCIES.filter((c) => !have.has(c));
+}
+
+export const PriceSetInput = z.object({
+  recurringInterval: z.enum(['day', 'week', 'month', 'year']).nullable().default(null),
+  recurringIntervalCount: z.number().int().min(1).max(365).nullable().default(null),
+  prices: z.array(z.object({
+    currency: z.string(),
+    unitAmount: z.number().int().min(0).max(99_999_999_999),
+    taxRatePercent: z.number().nullable().default(null),
+    taxLabel: z.string().nullable().default(null),
+  })).min(1).max(STORE_CURRENCIES.length),
+  activate: z.boolean().default(true),
+}).strict();
+
+/** Create (and by default activate) one price version per currency in a single transaction. */
+export async function createPriceSet(sql: Sql, actor: Actor, offerId: string, raw: unknown) {
+  requirePermission(actor, 'prices:write');
+  const input = PriceSetInput.parse(raw);
+  const seen = new Set<string>();
+  for (const p of input.prices) {
+    const c = p.currency.toLowerCase();
+    if (seen.has(c)) throw invalid(`Currency ${c.toUpperCase()} appears twice`);
+    seen.add(c);
+  }
+  return sql.begin(async (tx) => {
+    const created: Array<Record<string, unknown>> = [];
+    for (const p of input.prices) {
+      const id = await insertPriceVersion(tx, actor, CreatePriceInput.parse({ offerId, currency: p.currency, unitAmount: p.unitAmount, recurringInterval: input.recurringInterval,
+        recurringIntervalCount: input.recurringIntervalCount, taxRatePercent: p.taxRatePercent, taxLabel: p.taxLabel }));
+      created.push(input.activate ? await activateInTx(tx, actor, id) : await getPriceVersion(tx, id));
+    }
+    return { offerId, prices: created, missingCurrencies: await missingCurrencies(tx, offerId) };
+  });
+}
+
 export async function listPriceHistory(db: Db, offerId: string) {
   return db<Record<string, unknown>[]>`
-    SELECT pv.*, sm.stripe_price_id, sm.sync_state FROM price_versions pv LEFT JOIN stripe_price_mappings sm ON sm.price_version_id = pv.id
-    WHERE pv.offer_id = ${offerId} ORDER BY pv.created_at`;
+    SELECT pv.* FROM price_versions pv WHERE pv.offer_id = ${offerId} ORDER BY pv.created_at`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -588,7 +613,7 @@ export async function listPriceHistory(db: Db, offerId: string) {
 
 export interface PurchasableOffer {
   offer: { id: string; sku: string; name: string; description: string; kind: 'single' | 'bundle'; billing: 'one_time' | 'recurring' | 'free'; min_quantity: number; max_quantity: number; allow_promotion_codes: boolean; automatic_tax: boolean; billing_address_collection: 'auto' | 'required'; tax_id_collection: boolean; customer_kind: string; visibility: string };
-  price: { id: string; currency: string; unit_amount: number; recurring_interval: string | null; recurring_interval_count: number | null; tax_behavior: string; stripe_price_id: string; tax_rate_bps: number | null; tax_label: string | null };
+  price: { id: string; currency: string; unit_amount: number; recurring_interval: string | null; recurring_interval_count: number | null; tax_behavior: string; tax_rate_bps: number | null; tax_label: string | null };
   components: Array<{ componentId: string; policy: EffectivePolicy }>;
 }
 
@@ -599,13 +624,13 @@ export async function resolvePurchasable(db: Db, sku: string, currency: string, 
       AND (available_from IS NULL OR available_from <= ${now}) AND (available_until IS NULL OR available_until > ${now})`;
   if (!offer) throw notFound('Offer');
   const [price] = await db<PurchasableOffer['price'][]>`
-    SELECT pv.id, pv.currency, pv.unit_amount, pv.recurring_interval, pv.recurring_interval_count, pv.tax_behavior, sm.stripe_price_id, pv.tax_rate_bps, pv.tax_label
-    FROM price_versions pv JOIN stripe_price_mappings sm ON sm.price_version_id = pv.id
+    SELECT pv.id, pv.currency, pv.unit_amount, pv.recurring_interval, pv.recurring_interval_count, pv.tax_behavior, pv.tax_rate_bps, pv.tax_label
+    FROM price_versions pv
     WHERE pv.offer_id = ${offer.id} AND pv.currency = ${currency.toLowerCase()} AND pv.status = 'active'
       AND (pv.effective_from IS NULL OR pv.effective_from <= ${now}) AND (pv.effective_until IS NULL OR pv.effective_until > ${now})
-      AND sm.sync_state = 'synced' AND sm.stripe_price_id IS NOT NULL AND coalesce(sm.stripe_active, true)
     ORDER BY pv.created_at DESC LIMIT 1`;
   if (!price) throw new AppError('precondition_failed', `Offer ${sku} is not currently purchasable in ${currency.toUpperCase()}`);
+  if ((await missingCurrencies(db, offer.id, now)).length) throw new AppError('precondition_failed', `Offer ${sku} is not on sale: prices are incomplete`);
   const comps = await db<{ id: string; edition_policy_id: string }[]>`SELECT id, edition_policy_id FROM offer_entitlement_components WHERE offer_id = ${offer.id} ORDER BY position`;
   const components: PurchasableOffer['components'] = [];
   for (const c of comps) {
@@ -624,7 +649,7 @@ export interface StoreOffer {
   prices: Array<{ currency: string; unitAmount: number; recurringInterval: string | null; recurringIntervalCount: number | null; taxRateBps: number | null; taxLabel: string | null }>;
 }
 
-/** Public offers with every sellable currency (database prices with a verified Stripe mapping). */
+/** Public offers priced in every store currency (an offer missing any currency is not shown). */
 export async function listPublicCatalogue(db: Db, now: Date): Promise<StoreOffer[]> {
   const rows = await db<{ sku: string; name: string; description: string; billing: string; kind: string; currency: string; unit_amount: number; recurring_interval: string | null;
     recurring_interval_count: number | null; tax_rate_bps: number | null; tax_label: string | null; products: string; needs_org: boolean }[]>`
@@ -636,7 +661,6 @@ export async function listPublicCatalogue(db: Db, now: Date): Promise<StoreOffer
          WHERE c.offer_id = o.id AND ep.edition_id IN ('business', 'enterprise', 'education'))) AS needs_org
     FROM offers o JOIN price_versions pv ON pv.offer_id = o.id AND pv.status = 'active'
       AND (pv.effective_from IS NULL OR pv.effective_from <= ${now}) AND (pv.effective_until IS NULL OR pv.effective_until > ${now})
-    JOIN stripe_price_mappings sm ON sm.price_version_id = pv.id AND sm.sync_state = 'synced' AND coalesce(sm.stripe_active, true)
     WHERE o.status = 'active' AND o.visibility = 'public'
       AND (o.available_from IS NULL OR o.available_from <= ${now}) AND (o.available_until IS NULL OR o.available_until > ${now})
     ORDER BY o.name, pv.currency`;
@@ -649,5 +673,5 @@ export async function listPublicCatalogue(db: Db, now: Date): Promise<StoreOffer
     }
     o.prices.push({ currency: r.currency, unitAmount: r.unit_amount, recurringInterval: r.recurring_interval, recurringIntervalCount: r.recurring_interval_count, taxRateBps: r.tax_rate_bps, taxLabel: r.tax_label });
   }
-  return [...bySku.values()];
+  return [...bySku.values()].filter((o) => STORE_CURRENCIES.every((c) => o.prices.some((p) => p.currency === c)));
 }

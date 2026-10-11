@@ -1,7 +1,7 @@
 /** @jsxImportSource hono/jsx */
 import type { Child, FC } from 'hono/jsx';
 
-export const Layout: FC<{ title: string; realm: 'admin' | 'customer' | 'public'; who?: string | null; csrf?: string; flash?: { kind: 'ok' | 'err'; text: string } | null; script?: string; children?: Child }> = (p) => (
+export const Layout: FC<{ title: string; realm: 'admin' | 'customer' | 'public'; who?: string | null; csrf?: string; flash?: { kind: 'ok' | 'err'; text: string } | null; children?: Child }> = (p) => (
   <html lang="en">
     <head>
       <meta charset="utf-8" />
@@ -9,7 +9,7 @@ export const Layout: FC<{ title: string; realm: 'admin' | 'customer' | 'public';
       <meta name="robots" content="noindex" />
       <title>{p.title} · RePassCloud Licensing</title>
       <link rel="stylesheet" href="/assets/app.css" />
-      {p.script ? <script src={p.script} defer></script> : null}
+      <script src="/assets/app.js" defer></script>
     </head>
     <body>
       <header class="top">
@@ -50,10 +50,4 @@ export const Badge: FC<{ v: string }> = ({ v }) => {
 };
 
 export const fmt = (d: Date | string | null | undefined) => (d ? new Date(d).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC') : '—');
-const ZERO_DECIMAL = new Set(['bif', 'clp', 'djf', 'gnf', 'jpy', 'kmf', 'krw', 'mga', 'pyg', 'rwf', 'ugx', 'vnd', 'vuv', 'xaf', 'xof', 'xpf']);
-/** Format integer minor units for display only (never used for arithmetic). */
-export const money = (minor: number, currency: string) => {
-  const c = currency.toLowerCase();
-  const digits = ZERO_DECIMAL.has(c) ? 0 : 2;
-  return `${(minor / 10 ** digits).toFixed(digits)} ${c.toUpperCase()}`;
-};
+export { money } from '../lib/money.ts';

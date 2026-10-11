@@ -18,12 +18,14 @@ import { EffectivePolicySchema, type EffectivePolicy } from '../domain/policy.ts
 import { StripeClient, StripeError, verifyStripeSignature, WebhookSignatureError, type VerifiedStripeEvent } from '../integrations/stripe.ts';
 import { AppError, notFound } from '../lib/errors.ts';
 import { newId } from '../lib/ids.ts';
+import { money } from '../lib/money.ts';
 import { fromUnixSeconds, rfc3339 } from '../lib/time.ts';
 import { requirePermission, type Actor } from './actor.ts';
 import { audit } from './audit.ts';
 import type { CheckoutSnapshot } from './checkout.ts';
 import { insertCustomer } from './customers.ts';
 import { enqueueEmail, escapeHtml } from './email.ts';
+import { buyerFor, invoiceNumber, issueInvoice, sellerFor, type InvoiceAddress } from './invoices.ts';
 import { enqueueJob } from './jobs.ts';
 import { computeExpiry, createEntitlement, loadLicenseContext, revokeInTx, signLicense } from './licensing.ts';
 
@@ -126,7 +128,8 @@ interface StripeSession {
   metadata: Record<string, string> | null;
   mode: 'payment' | 'subscription';
   customer: string | { id: string } | null;
-  customer_details: { email: string | null; name: string | null; business_name?: string | null; individual_name?: string | null; address?: { country?: string | null } | null; tax_ids?: Array<{ value: string }> | null } | null;
+  customer_details: { email: string | null; name: string | null; business_name?: string | null; individual_name?: string | null; address?: InvoiceAddress | null; tax_ids?: Array<{ value: string }> | null } | null;
+  livemode?: boolean;
   amount_subtotal: number | null;
   amount_total: number | null;
   total_details: { amount_discount: number; amount_tax: number } | null;
@@ -134,7 +137,7 @@ interface StripeSession {
   payment_intent: string | { id: string } | null;
   subscription: string | StripeSubscription | null;
   invoice: string | { id: string } | null;
-  line_items?: { data: Array<{ price: { id: string }; quantity: number }> };
+  line_items?: { data: Array<{ price: { id: string; unit_amount?: number | null; currency?: string; product?: string | { id: string } | null; recurring?: { interval: string } | null }; quantity: number }> };
 }
 
 const idOf = (v: string | { id: string } | null | undefined): string | null => (v === null || v === undefined ? null : typeof v === 'string' ? v : v.id);
@@ -178,7 +181,18 @@ async function fulfilCheckout(sql: Sql, config: Config, actor: Actor, checkoutId
     // must match what we priced. A mismatch is quarantined for review, never granted.
     const line = session.line_items?.data?.[0];
     const problems: string[] = [];
-    if (!line || line.price.id !== chk.snapshot.price.stripePriceId) problems.push('line item price differs from snapshot');
+    const sp = chk.snapshot.price;
+    if (!line) problems.push('line item missing');
+    else if (sp.stripePriceId) {
+      if (line.price.id !== sp.stripePriceId) problems.push('line item price differs from snapshot');
+    } else {
+      // Inline price_data: Stripe must have charged our amount, in our currency, for our product.
+      const [pm] = await tx<{ stripe_product_id: string | null }[]>`SELECT stripe_product_id FROM stripe_product_mappings WHERE offer_id = ${chk.snapshot.offer.id}`;
+      if (line.price.unit_amount !== sp.unitAmount) problems.push(`unit amount ${line.price.unit_amount} != ${sp.unitAmount}`);
+      if (line.price.currency !== undefined && line.price.currency !== sp.currency) problems.push('line currency differs');
+      if (!pm?.stripe_product_id || idOf(line.price.product ?? null) !== pm.stripe_product_id) problems.push('line item product differs');
+      if ((line.price.recurring?.interval ?? null) !== sp.recurringInterval) problems.push('billing interval differs');
+    }
     if (line && line.quantity !== chk.quantity) problems.push('quantity differs');
     if (session.currency !== chk.currency) problems.push('currency differs');
     if (session.amount_subtotal !== null && session.amount_subtotal !== chk.expected_subtotal && chk.snapshot.price.taxBehavior !== 'inclusive') problems.push(`subtotal ${session.amount_subtotal} != expected ${chk.expected_subtotal}`);
@@ -243,10 +257,30 @@ async function fulfilCheckout(sql: Sql, config: Config, actor: Actor, checkoutId
     await audit(tx, actor, { action: 'purchase.completed', resourceType: 'purchase', resourceId: purchaseId, detail: { checkoutId, customerId, amountTotal: session.amount_total, currency: chk.currency, licenseIds: items.map((i) => i.licenseId) } });
 
     const name = (details.individual_name || details.name || businessName || 'customer').trim();
+    // Paid invoice for anything actually charged ($0 registrations get none).
+    let invoice: { id: string; number: number } | null = null;
+    const total = session.amount_total ?? chk.expected_subtotal;
+    if (total > 0) {
+      const sp = chk.snapshot.price;
+      const tax = session.total_details?.amount_tax ?? 0;
+      invoice = await issueInvoice(tx, {
+        kind: 'purchase', livemode: session.livemode ?? false, customerId, purchaseId,
+        snapshot: {
+          version: 1, seller: sellerFor(config), buyer: await buyerFor(tx, customerId, details.address ?? null, details.individual_name || details.name || null),
+          lines: [{ description: chk.snapshot.offer.name, detail: items.map((i) => `${i.policy.product.name} ${i.policy.major.majorVersion} ${i.policy.edition.displayName} (${termText(i)}) · licence ${i.licenseId}`).join('; '),
+            quantity: chk.quantity, unitAmount: sp.unitAmount, amount: sp.unitAmount * chk.quantity }],
+          currency: chk.currency, subtotal: session.amount_subtotal ?? chk.expected_subtotal, discount: session.total_details?.amount_discount ?? 0, tax,
+          taxLabel: tax > 0 ? (sp.taxLabel && sp.taxRateBps ? `${sp.taxLabel} ${sp.taxRateBps / 100}%` : 'Tax') : null,
+          total, paidAt: now.toISOString(), paymentReference: idOf(session.payment_intent) ?? idOf(session.invoice) ?? session.id, summary: chk.snapshot.offer.name,
+        },
+      });
+    }
+    const invNo = invoice ? invoiceNumber(config, invoice.number, session.livemode ?? false) : null;
     await enqueueEmail(tx, config, {
       businessKey: `purchase:${purchaseId}`, templateKey: 'purchase_confirmation', to: details.email ?? chk.email, toName: details.name ?? null,
-      vars: { customerName: name, purchaseId, productSummary: chk.snapshot.offer.name, itemsText: itemsText(items) },
-      rawHtml: { itemsHtml: itemsHtml(items) },
+      vars: { customerName: name, purchaseId, productSummary: chk.snapshot.offer.name, itemsText: itemsText(items), invoiceText: invNo ? `Your paid invoice ${invNo} is attached (PDF).\n\n` : '' },
+      rawHtml: { itemsHtml: itemsHtml(items), invoiceHtml: invNo ? `<p>Your paid invoice <strong>${invNo}</strong> is attached (PDF).</p>` : '' },
+      invoiceId: invoice?.id ?? null,
     });
     return `fulfilled ${purchaseId} (${items.length} licence${items.length === 1 ? '' : 's'})`;
   });
@@ -372,6 +406,11 @@ export async function syncSubscription(sql: Sql, config: Config, stripe: StripeC
 
 interface StripeInvoice {
   id: string;
+  livemode?: boolean;
+  subtotal?: number | null;
+  total_discount_amounts?: Array<{ amount: number }> | null;
+  customer_name?: string | null;
+  customer_address?: InvoiceAddress | null;
   status: string;
   billing_reason: string | null;
   currency: string;
@@ -385,7 +424,7 @@ interface StripeInvoice {
   subscription?: string | { id: string } | null;
   parent?: { subscription_details?: { subscription: string | { id: string } } | null } | null;
   status_transitions?: { paid_at: number | null };
-  lines: { data: Array<{ period: { start: number; end: number } }> };
+  lines: { data: Array<{ period: { start: number; end: number }; description?: string | null; quantity?: number | null; amount?: number | null }> };
 }
 
 function invoiceSubscriptionId(inv: StripeInvoice): string | null {
@@ -443,6 +482,37 @@ export async function handleInvoice(sql: Sql, config: Config, stripe: StripeClie
       await enqueueEmail(tx, config, { businessKey: `renewed:${inv.id}:${e.license_id}`, templateKey: 'subscription_renewed', to: c!.billing_email,
         vars: { productSummary: e.product, licenseId: e.license_id, expiresAt: rfc3339(target) } });
       extended++;
+    }
+    // Paid invoice for each renewal charge (the first charge is covered by the purchase invoice).
+    if (inv.billing_reason !== 'subscription_create' && inv.amount_paid > 0) {
+      const [orig] = await tx<{ snapshot: CheckoutSnapshot | null }[]>`
+        SELECT k.snapshot FROM subscriptions s LEFT JOIN checkouts k ON k.id = s.checkout_id WHERE s.id = ${sub.id}`;
+      const sp = orig?.snapshot?.price;
+      const summary = orig?.snapshot?.offer.name ?? [...new Set(ents.map((e) => e.product))].join(', ');
+      const period = `Service period ${new Date((inv.lines?.data?.[0]?.period?.start ?? 0) * 1000).toISOString().slice(0, 10)} to ${periodEnd.toISOString().slice(0, 10)}`;
+      const lines = (inv.lines?.data ?? []).filter((l) => (l.amount ?? 0) > 0).map((l) => {
+        const qty = Math.max(1, l.quantity ?? 1);
+        return { description: summary || (l.description ?? 'Subscription renewal'), detail: period, quantity: qty, unitAmount: Math.round((l.amount ?? 0) / qty), amount: l.amount ?? 0 };
+      });
+      const discount = (inv.total_discount_amounts ?? []).reduce((n, d) => n + (d.amount ?? 0), 0);
+      const paidAt = fromUnixSeconds(inv.status_transitions?.paid_at ?? null) ?? new Date();
+      const livemode = inv.livemode ?? false;
+      const issued = await issueInvoice(tx, {
+        kind: 'renewal', livemode, customerId: sub.customer_id, stripeInvoiceId: inv.id,
+        snapshot: {
+          version: 1, seller: sellerFor(config), buyer: await buyerFor(tx, sub.customer_id, inv.customer_address ?? null, inv.customer_name ?? null),
+          lines: lines.length ? lines : [{ description: summary || 'Subscription renewal', detail: period, quantity: 1, unitAmount: inv.amount_paid - tax, amount: inv.amount_paid - tax }],
+          currency: inv.currency, subtotal: inv.subtotal ?? inv.amount_paid - tax + discount, discount, tax,
+          taxLabel: tax > 0 ? (sp?.taxLabel && sp.taxRateBps ? `${sp.taxLabel} ${sp.taxRateBps / 100}%` : 'Tax') : null,
+          total: inv.amount_paid, paidAt: paidAt.toISOString(), paymentReference: inv.id, summary,
+        },
+      });
+      const [cust] = await tx<{ display_name: string; organisation_name: string | null }[]>`SELECT display_name, organisation_name FROM customers WHERE id = ${sub.customer_id}`;
+      await enqueueEmail(tx, config, {
+        businessKey: `receipt:${inv.id}`, templateKey: 'payment_receipt', to: c!.billing_email,
+        vars: { customerName: cust?.organisation_name ?? cust?.display_name ?? 'customer', amount: money(inv.amount_paid, inv.currency), productSummary: summary, invoiceNumber: invoiceNumber(config, issued.number, livemode) },
+        invoiceId: issued.id,
+      });
     }
     return `extended ${extended} entitlement(s) to ${periodEnd.toISOString()}`;
   });

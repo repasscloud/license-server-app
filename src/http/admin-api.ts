@@ -19,12 +19,13 @@ import * as customers from '../services/customers.ts';
 import * as email from '../services/email.ts';
 import { getLicenseDetail, grantEntitlements, searchLicenses } from '../services/entitlements.ts';
 import { withIdempotency } from '../services/idempotency.ts';
+import * as invoices from '../services/invoices.ts';
 import { listJobs, retryDeadJob } from '../services/jobs.ts';
 import * as licensing from '../services/licensing.ts';
 import * as keys from '../services/signing-keys.ts';
 import * as stripeSync from '../services/stripe-sync.ts';
 import { isSignatureAlgorithm } from '../crypto/algorithms.ts';
-import { type AppEnv, type Ctx, logError, readText, toAppError } from './context.ts';
+import { type AppEnv, type Ctx, logError, pdfResponse, readText, toAppError } from './context.ts';
 import { openApiDocument } from './openapi.ts';
 
 export const adminApi = new Hono<AppEnv>();
@@ -135,29 +136,35 @@ adminApi.post('/offers/:id/status', mutation(200, (c, b) => catalogue.setOfferSt
 adminApi.get('/offers/:id/prices', async (c) => (need(c, 'prices:read'), c.json({ data: await catalogue.listPriceHistory(c.get('deps').sql, c.req.param('id')) })));
 adminApi.post('/prices', mutation(201, (c, b) => catalogue.createPriceVersion(c.get('deps').sql, actor(c), b)));
 adminApi.post('/prices/:id/activate', mutation(200, (c) => catalogue.activatePriceVersion(c.get('deps').sql, actor(c), c.req.param('id')!)));
+adminApi.post('/offers/:id/prices', mutation(201, (c, b) => catalogue.createPriceSet(c.get('deps').sql, actor(c), c.req.param('id')!, b)));
 adminApi.post('/prices/:id/archive', mutation(200, (c) => catalogue.archivePriceVersion(c.get('deps').sql, actor(c), c.req.param('id')!)));
 
 // --- stripe --------------------------------------------------------------------------------
 adminApi.get('/stripe/mappings', async (c) => (need(c, 'prices:read'), c.json({ data: await stripeSync.listMappings(c.get('deps').sql) })));
 adminApi.post('/stripe/sync', mutation(202, async (c, b) => {
-  const input = z.object({ offerId: z.string().optional(), priceVersionId: z.string().optional(), wait: z.boolean().default(false) }).strict().parse(b);
+  const input = z.object({ offerId: z.string(), wait: z.boolean().default(false) }).strict().parse(b);
   const { sql, stripe } = c.get('deps');
   if (!input.wait) {
     await stripeSync.requestSync(sql, actor(c), input);
     return { queued: true };
   }
   need(c, 'stripe:sync');
-  const out: Record<string, string> = {};
-  if (input.offerId) out.stripeProductId = await stripeSync.syncOffer(sql, stripe, input.offerId, actor(c));
-  if (input.priceVersionId) out.stripePriceId = await stripeSync.syncPrice(sql, stripe, input.priceVersionId, actor(c));
-  return out;
+  return { stripeProductId: await stripeSync.syncOffer(sql, stripe, input.offerId, actor(c)) };
 }));
-adminApi.post('/stripe/prices/:id/repair', mutation(200, (c, b) => stripeSync.repairPriceMapping(c.get('deps').sql, c.get('deps').stripe, actor(c), c.req.param('id')!, z.enum(['retry', 'reactivate', 'recreate']).parse(b.action))));
-adminApi.post('/stripe/drift-check', mutation(200, async (c) => (need(c, 'stripe:sync'), stripeSync.checkDrift(c.get('deps').sql, c.get('deps').stripe, 20))));
 
 // --- customers, entitlements, licences -----------------------------------------------------
 adminApi.get('/customers', async (c) => (need(c, 'customers:read'), c.json(list(await customers.listCustomers(c.get('deps').sql, { search: q(c, 'q'), ...page(c) }), c))));
 adminApi.post('/customers', mutation(201, (c, b) => customers.createCustomer(c.get('deps').sql, actor(c), b)));
+adminApi.get('/customers/:id/invoices', async (c) => (need(c, 'customers:read'), c.json({ data: await invoices.listInvoices(c.get('deps').sql, c.req.param('id')) })));
+adminApi.get('/invoices/:file', async (c) => {
+  need(c, 'customers:read');
+  const { sql, config } = c.get('deps');
+  const file = c.req.param('file');
+  const inv = await invoices.getInvoice(sql, file.replace(/\.pdf$/, ''));
+  const number = invoices.invoiceNumber(config, inv.number, inv.livemode);
+  if (file.endsWith('.pdf')) return pdfResponse(invoices.renderInvoicePdf(config, inv), `${number}.pdf`);
+  return c.json({ ...inv, invoiceNumber: number });
+});
 adminApi.get('/customers/:id', async (c) => (need(c, 'customers:read'), c.json(await customers.getCustomer(c.get('deps').sql, c.req.param('id')))));
 adminApi.patch('/customers/:id', mutation(200, (c, b) => customers.updateCustomer(c.get('deps').sql, actor(c), c.req.param('id')!, b)));
 adminApi.get('/customers/:id/entitlements', async (c) => (need(c, 'entitlements:read'), c.json({ data: await customers.listCustomerEntitlements(c.get('deps').sql, c.req.param('id')) })));
@@ -297,7 +304,7 @@ adminApi.get('/system/health', async (c) => {
            (SELECT count(*)::int FROM email_outbox WHERE status IN ('pending', 'failed')) AS email_pending,
            (SELECT count(*)::int FROM email_outbox WHERE status IN ('dead', 'uncertain')) AS email_attention,
            (SELECT count(*)::int FROM stripe_events WHERE status IN ('failed', 'dead')) AS stripe_events_failed,
-           (SELECT count(*)::int FROM stripe_price_mappings WHERE sync_state IN ('failed', 'drifted')) AS stripe_mappings_attention,
+           (SELECT count(*)::int FROM stripe_product_mappings WHERE sync_state = 'failed') AS stripe_mappings_attention,
            (SELECT count(*)::int FROM entitlements WHERE review_required) AS entitlements_review`;
   return c.json({ environment: config.environment, missingSecrets: config.missingSecrets(), mailTransport: config.mailTransport, stripeLivemode: c.get('deps').stripe.livemode, stats });
 });

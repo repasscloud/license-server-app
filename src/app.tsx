@@ -13,7 +13,7 @@ import { adminUi } from './http/admin-ui.tsx';
 import { type AppEnv, baseMiddleware, bodyLimit, logError, securityHeaders } from './http/context.ts';
 import { portalUi, storeUi } from './http/portal-ui.tsx';
 import { webhooks } from './http/webhooks.ts';
-import { APP_CSS, STORE_JS } from './views/assets.ts';
+import { APP_CSS, APP_JS } from './views/assets.ts';
 import { Layout } from './views/layout.tsx';
 
 export const app = new Hono<AppEnv>();
@@ -21,7 +21,7 @@ export const app = new Hono<AppEnv>();
 app.use('*', securityHeaders);
 app.get('/healthz', (c) => c.json({ status: 'ok' }));
 app.get('/assets/app.css', (c) => c.body(APP_CSS, 200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }));
-app.get('/assets/store.js', (c) => c.body(STORE_JS, 200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }));
+app.get('/assets/app.js', (c) => c.body(APP_JS, 200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }));
 app.get('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /\n'));
 
 app.use('*', baseMiddleware);

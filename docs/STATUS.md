@@ -62,6 +62,8 @@ Reproduce with `npm run secrets:scan && npm run lint && npm run typecheck && npm
 
 - **Signing keys are decrypted inside the Worker.** This is application-level envelope encryption, **not** an HSM/KMS (ADR-0003).
 - **Admin MFA is TOTP.** Passkeys/WebAuthn and dual approval for key operations are not implemented (ADR-0004). Cloudflare Access in front of `/admin*` is recommended.
+- **Prices exist only in PostgreSQL.** Checkout sends the amount inline (`price_data`) against one Stripe Product per offer; no Stripe Price objects are created or synced. An offer sells only when all 11 store currencies (AUD USD EUR GBP CAD NZD SGD HKD JPY CNY CHF) have an active price.
+- **Invoices** are the server's own numbered "Paid" PDFs (purchase and each renewal charge), emailed and downloadable. They use the standard Helvetica font: characters outside Western European Latin (e.g. CJK names) print as "?". Dates are UTC. Numbers come from a sequence and are not guaranteed gap-free. Seller name/ABN come from `INVOICE_SELLER_*` in `wrangler.jsonc`; confirm them, and your GST registration, before live sales.
 - **Stripe API version is pinned to `2026-09-30.endive`** (reviewed against the endive changelog; see ADR-0005). It is still unverified against real Stripe until the test-mode purchase.
 - **The MailerSend message-ID location is ambiguous in their docs.** Both documented paths are accepted. Delivery tracking exists only if the webhook secret is configured.
 - **Uncertain email sends** (timeouts) are not resent automatically; an operator resolves them.
@@ -72,6 +74,8 @@ Reproduce with `npm run secrets:scan && npm run lint && npm run typecheck && npm
 - The CI action `actions/setup-node@v5` is referenced by tag; pin it to a SHA (marked TODO).
 
 ## Owner actions required (in order)
+
+0. After pulling the store/invoice update: `npm run db:migrate` (migrations 0004 and 0005), then re-run `sql/roles.sql` (new tables and the invoice number sequence).
 
 1. Create the Supabase project. Run migrations and `sql/roles.sql`. Revoke `anon`/`authenticated` grants.
 2. Create Hyperdrive configurations **with `--caching-disabled`** and put their IDs in `wrangler.jsonc`.

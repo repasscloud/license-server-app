@@ -1,6 +1,6 @@
-// Server-created Stripe Checkout. The browser supplies only (sku, currency, quantity, email):
-// never an amount, entitlement, seat count or Stripe Price ID. Everything sent to Stripe comes
-// from the database price version and its synced Stripe mapping, and an immutable snapshot of
+// Server-created Stripe Checkout. The browser supplies what to buy and who is buying: never an
+// amount, entitlement or seat count. The amount sent to Stripe (inline price_data) comes from
+// the database price version, and an immutable snapshot of
 // what will be granted is stored before Stripe is called. The success redirect proves nothing:
 // fulfilment happens only from verified Stripe state (billing.ts).
 
@@ -15,7 +15,7 @@ import type { Actor } from './actor.ts';
 import { audit } from './audit.ts';
 import { loadPolicyRows, resolvePurchasable } from './catalogue.ts';
 import { normaliseEmail, resolveStoreCustomer } from './customers.ts';
-import { ensureStripeCustomer, ensureStripeTaxRate } from './stripe-sync.ts';
+import { ensureStripeCustomer, ensureStripeProduct, ensureStripeTaxRate } from './stripe-sync.ts';
 
 export const CreateCheckoutInput = z.object({
   sku: z.string().regex(/^[A-Za-z0-9_.-]{1,100}$/),
@@ -38,7 +38,9 @@ const ORGANISATION_EDITIONS = new Set(['business', 'enterprise', 'education']);
 export interface CheckoutSnapshot {
   version: 1;
   offer: { id: string; sku: string; name: string; kind: string; billing: string };
-  price: { id: string; currency: string; unitAmount: number; recurringInterval: string | null; recurringIntervalCount: number | null; taxBehavior: string; stripePriceId: string;
+  price: { id: string; currency: string; unitAmount: number; recurringInterval: string | null; recurringIntervalCount: number | null; taxBehavior: string;
+    /** Legacy (Stripe Price objects); new checkouts send the amount inline. */
+    stripePriceId?: string | null;
     /** Flat exclusive tax added on top (e.g. 1000 = 10%), with its invoice label. */
     taxRateBps?: number | null; taxLabel?: string | null };
   quantity: number;
@@ -112,7 +114,7 @@ export async function createCheckout(sql: Sql, config: Config, stripe: StripeCli
   const snapshot: CheckoutSnapshot = {
     version: 1,
     offer: { id: offer.id, sku: offer.sku, name: offer.name, kind: offer.kind, billing: offer.billing },
-    price: { id: price.id, currency: price.currency, unitAmount: price.unit_amount, recurringInterval: price.recurring_interval, recurringIntervalCount: price.recurring_interval_count, taxBehavior: price.tax_behavior, stripePriceId: price.stripe_price_id,
+    price: { id: price.id, currency: price.currency, unitAmount: price.unit_amount, recurringInterval: price.recurring_interval, recurringIntervalCount: price.recurring_interval_count, taxBehavior: price.tax_behavior,
       taxRateBps: price.tax_rate_bps, taxLabel: price.tax_label },
     quantity: input.quantity,
     components,
@@ -121,7 +123,7 @@ export async function createCheckout(sql: Sql, config: Config, stripe: StripeCli
   await sql`
     INSERT INTO checkouts (id, idempotency_key, customer_id, portal_user_id, email, offer_id, price_version_id, stripe_price_id, quantity, currency, unit_amount,
                            expected_subtotal, mode, snapshot, status, expires_at)
-    VALUES (${id}, ${input.idempotencyKey}, ${customerId}, ${ctx.portalUserId ?? null}, ${input.email}, ${offer.id}, ${price.id}, ${price.stripe_price_id},
+    VALUES (${id}, ${input.idempotencyKey}, ${customerId}, ${ctx.portalUserId ?? null}, ${input.email}, ${offer.id}, ${price.id}, ${null},
             ${input.quantity}, ${price.currency}, ${price.unit_amount}, ${price.unit_amount * input.quantity},
             ${offer.billing === 'recurring' ? 'subscription' : 'payment'}, ${sql.json(snapshot as never)}, 'creating', ${new Date(now.getTime() + 23 * 3600_000)})
     ON CONFLICT (idempotency_key) DO NOTHING`;
@@ -142,7 +144,9 @@ async function startStripeSession(sql: Sql, config: Config, stripe: StripeClient
   const p = c.snapshot.price;
   let taxRateId: string | null = null;
   let stripeCustomerId: string | null = null;
+  let stripeProductId: string;
   try {
+    stripeProductId = await ensureStripeProduct(sql, stripe, c.snapshot.offer.id);
     if (p.taxRateBps && p.taxLabel) taxRateId = await ensureStripeTaxRate(sql, stripe, p.taxLabel, p.taxRateBps);
     if (c.customer_id) stripeCustomerId = await ensureStripeCustomer(sql, stripe, c.customer_id);
   } catch (e) {
@@ -154,7 +158,16 @@ async function startStripeSession(sql: Sql, config: Config, stripe: StripeClient
     mode: c.mode,
     client_reference_id: c.id,
     currency: c.currency,
-    line_items: [{ price: p.stripePriceId, quantity: c.quantity, ...(taxRateId ? { tax_rates: [taxRateId] } : {}) }],
+    // The amount comes from the database price version the buyer was shown; no Stripe Price object.
+    line_items: [{
+      price_data: {
+        currency: p.currency, unit_amount: p.unitAmount, product: stripeProductId,
+        ...(p.recurringInterval ? { recurring: { interval: p.recurringInterval, interval_count: p.recurringIntervalCount ?? 1 } } : {}),
+        ...(p.taxBehavior !== 'unspecified' ? { tax_behavior: p.taxBehavior } : {}),
+      },
+      quantity: c.quantity,
+      ...(taxRateId ? { tax_rates: [taxRateId] } : {}),
+    }],
     success_url: `${new URL(`/checkout/${c.id}/return`, base)}?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: new URL(`/checkout/${c.id}/cancelled`, base).toString(),
     metadata: { repass_checkout_id: c.id },
@@ -164,14 +177,11 @@ async function startStripeSession(sql: Sql, config: Config, stripe: StripeClient
   if (offer!.allow_promotion_codes) params.allow_promotion_codes = true;
   if (offer!.automatic_tax) params.automatic_tax = { enabled: true };
   if (offer!.tax_id_collection) params.tax_id_collection = { enabled: true };
-  if (stripeCustomerId) {
-    // Checkout on the existing customer: the email is fixed and no new Stripe customer is made.
-    params.customer = stripeCustomerId;
-    if (offer!.automatic_tax || offer!.tax_id_collection) params.customer_update = { address: 'auto', name: 'auto' };
-  } else {
-    params.customer_email = c.email;
-    if (c.mode === 'payment') params.customer_creation = 'always';
-  }
+  // Checkout always opens on the customer's single Stripe customer: the (lowercase) email is
+  // already filled in and cannot be changed, and Stripe never creates another customer.
+  if (!stripeCustomerId) throw new AppError('precondition_failed', 'Checkout requires a customer');
+  params.customer = stripeCustomerId;
+  if (offer!.automatic_tax || offer!.tax_id_collection) params.customer_update = { address: 'auto', name: 'auto' };
   if (c.mode === 'subscription') {
     params.subscription_data = { metadata: { repass_checkout_id: c.id }, ...(trialDays ? { trial_period_days: trialDays } : {}) };
   } else {

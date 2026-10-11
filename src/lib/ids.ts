@@ -20,7 +20,7 @@ export function ulid(now = Date.now()): string {
 export type IdPrefix =
   | 'prd' | 'pmj' | 'rel' | 'pep' | 'off' | 'ocp' | 'prc'
   | 'cus' | 'usr' | 'adm' | 'svc' | 'tok' | 'chl'
-  | 'chk' | 'sub' | 'pur' | 'pul' | 'inv'
+  | 'chk' | 'sub' | 'pur' | 'pul' | 'inv' | 'cin'
   | 'eps' | 'ent' | 'lic' | 'akey' | 'act' | 'kcp'
   | 'etp' | 'eml' | 'req';
 

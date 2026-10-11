@@ -21,8 +21,19 @@ button.secondary,.button.secondary{background:transparent;color:var(--accent)}bu
 .currency-picker{display:flex;gap:8px;align-items:center;margin:0 0 16px}.currency-picker label{margin:0}.currency-picker select{width:auto}
 `;
 
-/** Store currency switcher (served from /assets/store.js; no inline script under CSP). */
-export const STORE_JS = `(() => {
+/** Site script (served from /assets/app.js; no inline script under CSP). Progressive only:
+ *  every form also works without it, and the server normalises everything again. */
+export const APP_JS = `(() => {
+  // Email addresses are always lowercase (Stripe matches customers by exact email).
+  for (const el of document.querySelectorAll('input[type=email]')) {
+    el.setAttribute('autocapitalize', 'none');
+    el.setAttribute('spellcheck', 'false');
+    const lower = () => { const v = el.value.trim().toLowerCase(); if (v !== el.value) el.value = v; };
+    el.addEventListener('input', () => { const p = el.selectionStart; el.value = el.value.toLowerCase(); try { el.setSelectionRange(p, p); } catch {} });
+    el.addEventListener('blur', lower);
+    lower();
+  }
+  // Store currency switcher.
   const picker = document.querySelector('[data-currency-picker]');
   if (!picker) return;
   const apply = (cur) => {

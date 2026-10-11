@@ -13,6 +13,7 @@ import { listAudit } from '../services/audit.ts';
 import * as admins from '../services/admins.ts';
 import * as billing from '../services/billing.ts';
 import * as catalogue from '../services/catalogue.ts';
+import { getInvoice, invoiceNumber, listInvoices, renderInvoicePdf } from '../services/invoices.ts';
 import { listCheckouts } from '../services/checkout.ts';
 import * as customers from '../services/customers.ts';
 import * as email from '../services/email.ts';
@@ -23,7 +24,7 @@ import * as licensing from '../services/licensing.ts';
 import * as keys from '../services/signing-keys.ts';
 import * as stripeSync from '../services/stripe-sync.ts';
 import { Badge, Csrf, fmt, Layout, money } from '../views/layout.tsx';
-import { type AppEnv, type Ctx, kickEmailDispatch, logError, toAppError } from './context.ts';
+import { type AppEnv, type Ctx, kickEmailDispatch, logError, pdfResponse, toAppError } from './context.ts';
 import { bool, clearSessionCookie, csrfGuard, formData, loadSession, numOrNull, setSessionCookie, strOrNull, type RealmSession } from './session.ts';
 
 export const adminUi = new Hono<AppEnv>();
@@ -218,7 +219,7 @@ adminUi.get('/', async (c) => {
            (SELECT count(*)::int FROM outbox_jobs WHERE status = 'dead') AS dead_jobs,
            (SELECT count(*)::int FROM email_outbox WHERE status IN ('dead', 'uncertain')) AS email_attention,
            (SELECT count(*)::int FROM stripe_events WHERE status IN ('failed', 'dead')) AS stripe_failed,
-           (SELECT count(*)::int FROM stripe_price_mappings WHERE sync_state IN ('failed', 'drifted')) AS mapping_attention,
+           (SELECT count(*)::int FROM stripe_product_mappings WHERE sync_state = 'failed') AS mapping_attention,
            (SELECT count(*)::int FROM entitlements WHERE review_required) AS review_required`;
   const missing = c.get('deps').config.missingSecrets();
   const recent: ReadonlyArray<Awaited<ReturnType<typeof listAudit>>[number]> = can(c, 'audit:read') ? await listAudit(sql, { limit: 15 }) : [];
@@ -477,24 +478,26 @@ adminUi.get('/offers/:id', async (c) => {
           {o.components.map((x) => <tr><td>{String(x.product_slug)} v{String(x.major_version)} <span class="muted">({String(x.protocol_id)})</span></td><td>{String(x.edition_name)}</td><td>{String(x.term_type)}{x.term_interval ? ` ${x.term_interval_count} ${x.term_interval}` : ''}</td><td>{String(x.seats_per_unit ?? '—')}</td><td>{x.quantity_scales_seats ? 'yes' : 'no'}</td><td>{String(x.trial_days ?? '—')}</td><td>{String(x.grace_days)}</td><td>{String(x.refund_action)}</td><td>{String(x.dispute_action)}</td></tr>)}
         </tbody></table></div>
         <h2>Prices (immutable versions)</h2>
-        <div class="table-wrap"><table><thead><tr><th>Version</th><th>Amount</th><th>Interval</th><th>Tax</th><th>Status</th><th>Stripe price</th><th>Sync</th><th></th></tr></thead><tbody>
+        {o.status !== 'archived' ? (() => { const have = new Set(o.prices.filter((p) => p.status === 'active').map((p) => String(p.currency))); const missing = catalogue.STORE_CURRENCIES.filter((cur) => !have.has(cur));
+          return missing.length ? <div class="flash err" role="alert">Not sellable: no active price in {missing.join(', ').toUpperCase()}. Every store currency needs a price before the offer is shown in the store.</div> : null; })() : null}
+        <div class="table-wrap"><table><thead><tr><th>Version</th><th>Amount</th><th>Interval</th><th>Tax</th><th>Status</th><th></th></tr></thead><tbody>
           {o.prices.map((p) => <tr><td><code>{String(p.id)}</code></td><td>{money(Number(p.unit_amount), String(p.currency))}</td><td>{p.recurring_interval ? `${p.recurring_interval_count} ${p.recurring_interval}` : 'one-time'}</td><td>{p.tax_rate_bps ? `${String(p.tax_label)} ${Number(p.tax_rate_bps) / 100}% (added)` : String(p.tax_behavior)}</td><td><Badge v={String(p.status)} /></td>
-            <td><code>{String(p.stripe_price_id ?? '—')}</code></td><td><Badge v={String(p.sync_state ?? 'pending')} />{p.sync_error ? <div class="muted">{String(p.sync_error)}</div> : null}</td>
             <td>{w && p.status === 'draft' ? <form class="inline" method="post" action={`/admin/prices/${p.id}/activate`}><Csrf token={c.get('csrf')} /><button type="submit">Activate</button></form> : null}
-              {w && p.status !== 'archived' ? <form class="inline" method="post" action={`/admin/prices/${p.id}/archive`}><Csrf token={c.get('csrf')} /><button class="secondary" type="submit">Archive</button></form> : null}
-              {can(c, 'stripe:sync') && ['failed', 'drifted', 'pending'].includes(String(p.sync_state)) ? ['retry', 'reactivate', 'recreate'].map((a) => <form class="inline" method="post" action={`/admin/prices/${p.id}/repair`}><Csrf token={c.get('csrf')} /><input type="hidden" name="action" value={a} /><button class="secondary" type="submit">{a}</button></form>) : null}</td></tr>)}
+              {w && p.status !== 'archived' ? <form class="inline" method="post" action={`/admin/prices/${p.id}/archive`}><Csrf token={c.get('csrf')} /><button class="secondary" type="submit">Archive</button></form> : null}</td></tr>)}
         </tbody></table></div>
         {w ? (
-          <details class="card"><summary>New price version</summary><form method="post" action="/admin/prices"><Csrf token={c.get('csrf')} /><input type="hidden" name="offerId" value={o.id} />
-            <div class="row"><div><label for="currency">Currency</label><select id="currency" name="currency">{catalogue.STORE_CURRENCIES.map((cur) => <option value={cur}>{cur.toUpperCase()}</option>)}</select></div>
-              <div><label for="unitAmount">Amount in minor units (e.g. cents)</label><input id="unitAmount" name="unitAmount" type="number" min="0" step="1" required /></div>
-              {o.billing === 'recurring' ? <div><label for="ri">Interval</label><div class="row"><input id="ri" name="recurringIntervalCount" type="number" min="1" value="1" /><select name="recurringInterval"><option>month</option><option>year</option><option>week</option><option>day</option></select></div></div> : null}
-              <div><label for="taxBehavior">Stripe tax behaviour</label><select id="taxBehavior" name="taxBehavior"><option>unspecified</option><option>exclusive</option><option>inclusive</option></select></div></div>
-            <div class="row"><div><label for="taxRatePercent">Tax % added on top (optional, e.g. 10)</label><input id="taxRatePercent" name="taxRatePercent" type="number" min="0.01" max="100" step="0.01" /></div>
-              <div><label for="taxLabel">Tax label (e.g. GST)</label><input id="taxLabel" name="taxLabel" maxlength={50} /></div>
-              <div><label for="stripePriceId">Existing Stripe price ID (optional)</label><input id="stripePriceId" name="stripePriceId" pattern="price_[A-Za-z0-9]+" placeholder="price_…" /></div></div>
-            <p class="muted">Creates an immutable draft. With a Stripe price ID, that price (made by you in Stripe; it may be multi-currency) is checked against this amount, currency and interval before it can be activated; otherwise a matching Stripe Price is created. Tax is added at checkout: 100 + GST 10% = 110. Existing purchases and subscriptions keep their historical prices.</p>
-            <button type="submit">Create price version</button></form></details>
+          <details class="card" open={o.prices.length === 0}><summary>Set prices (all currencies)</summary><form method="post" action={`/admin/offers/${o.id}/prices`}><Csrf token={c.get('csrf')} />
+            {o.billing === 'recurring' ? <div class="row"><div><label for="ri">Billing interval</label><div class="row"><input id="ri" name="recurringIntervalCount" type="number" min="1" value="1" /><select name="recurringInterval"><option>year</option><option>month</option><option>week</option><option>day</option></select></div></div></div> : null}
+            <div class="table-wrap"><table><thead><tr><th>Currency</th><th>Amount (minor units, e.g. cents; JPY whole yen)</th><th>Tax % added on top</th><th>Tax label</th></tr></thead><tbody>
+              {catalogue.STORE_CURRENCIES.map((cur) => {
+                const cur0 = o.prices.find((p) => p.status === 'active' && p.currency === cur);
+                return <tr><td>{cur.toUpperCase()}</td><td><input name={`amount_${cur}`} type="number" min="0" step="1" required value={cur0 ? String(cur0.unit_amount) : ''} /></td>
+                  <td><input name={`tax_${cur}`} type="number" min="0.01" max="100" step="0.01" value={cur0?.tax_rate_bps ? String(Number(cur0.tax_rate_bps) / 100) : ''} /></td>
+                  <td><input name={`taxlabel_${cur}`} maxlength={50} value={cur0?.tax_label ? String(cur0.tax_label) : ''} placeholder={cur === 'aud' ? 'GST' : ''} /></td></tr>;
+              })}
+            </tbody></table></div>
+            <p class="muted">Every currency is required. Saving creates a new immutable price version for each currency that changed and activates it; unchanged currencies are left as they are. Existing purchases and subscriptions keep what they paid. Tax is added at checkout (100 + GST 10% = 110).</p>
+            <button type="submit">Save prices</button></form></details>
         ) : null}
       </>
     ),
@@ -510,20 +513,22 @@ adminUi.post('/offers/:id/sync', action(async (c) => {
   await stripeSync.syncOffer(c.get('deps').sql, c.get('deps').stripe, c.req.param('id')!, c.get('actor'));
   return back(c, `/admin/offers/${c.req.param('id')}`, 'Stripe product synced');
 }));
-adminUi.post('/prices', action(async (c, f) => {
-  const p = await catalogue.createPriceVersion(c.get('deps').sql, c.get('actor'), { offerId: f.offerId, currency: f.currency, unitAmount: Number(f.unitAmount), recurringInterval: strOrNull(f.recurringInterval), recurringIntervalCount: numOrNull(f.recurringIntervalCount), taxBehavior: f.taxBehavior,
-    stripePriceId: strOrNull(f.stripePriceId), taxRatePercent: numOrNull(f.taxRatePercent), taxLabel: strOrNull(f.taxLabel) });
-  // Try to sync immediately for a responsive UI; the queued job covers failures.
-  let note = 'Price created; Stripe sync queued.';
-  if (can(c, 'stripe:sync')) {
-    try {
-      await stripeSync.syncPrice(c.get('deps').sql, c.get('deps').stripe, String(p.id), c.get('actor'));
-      note = 'Price created and synced to Stripe. Activate it to make it sellable.';
-    } catch (e) {
-      note = `Price created; Stripe sync failed and will be retried: ${toAppError(e).message === 'Internal error' ? String((e as Error).message).slice(0, 200) : toAppError(e).message}`;
-    }
-  }
-  return back(c, `/admin/offers/${f.offerId}`, note);
+adminUi.post('/offers/:id/prices', action(async (c, f) => {
+  const offerId = c.req.param('id')!;
+  const { sql } = c.get('deps');
+  const offer = await catalogue.getOffer(sql, offerId);
+  const interval = strOrNull(f.recurringInterval);
+  const intervalCount = interval ? (numOrNull(f.recurringIntervalCount) ?? 1) : null;
+  // Only currencies whose amount, tax or interval changed get a new version.
+  const prices = catalogue.STORE_CURRENCIES.map((cur) => ({ currency: cur, unitAmount: Number(f[`amount_${cur}`]), taxRatePercent: numOrNull(f[`tax_${cur}`]), taxLabel: strOrNull(f[`taxlabel_${cur}`]) }))
+    .filter((p) => {
+      const cur0 = offer.prices.find((x) => x.status === 'active' && x.currency === p.currency);
+      return !cur0 || Number(cur0.unit_amount) !== p.unitAmount || (cur0.tax_rate_bps === null ? null : Number(cur0.tax_rate_bps) / 100) !== p.taxRatePercent
+        || (cur0.tax_label ?? null) !== p.taxLabel || (cur0.recurring_interval ?? null) !== interval || (cur0.recurring_interval_count ?? null) !== intervalCount;
+    });
+  if (!prices.length) return back(c, `/admin/offers/${offerId}`, 'No price changes');
+  const r = await catalogue.createPriceSet(sql, c.get('actor'), offerId, { recurringInterval: interval, recurringIntervalCount: intervalCount, prices, activate: true });
+  return back(c, `/admin/offers/${offerId}`, `Saved ${prices.length} price(s)${r.missingCurrencies.length ? `; still missing ${r.missingCurrencies.join(', ').toUpperCase()}` : '; all currencies priced'}`);
 }));
 adminUi.post('/prices/:id/activate', action(async (c) => {
   const p = await catalogue.activatePriceVersion(c.get('deps').sql, c.get('actor'), c.req.param('id')!);
@@ -532,11 +537,6 @@ adminUi.post('/prices/:id/activate', action(async (c) => {
 adminUi.post('/prices/:id/archive', action(async (c) => {
   const p = await catalogue.archivePriceVersion(c.get('deps').sql, c.get('actor'), c.req.param('id')!);
   return back(c, `/admin/offers/${p.offer_id}`, 'Price archived');
-}));
-adminUi.post('/prices/:id/repair', action(async (c, f) => {
-  await stripeSync.repairPriceMapping(c.get('deps').sql, c.get('deps').stripe, c.get('actor'), c.req.param('id')!, f.action as 'retry');
-  const p = await catalogue.getPriceVersion(c.get('deps').sql, c.req.param('id')!);
-  return back(c, `/admin/offers/${p.offer_id}`, `Repair (${f.action}) completed`);
 }));
 
 // --------------------------------------------------------------------------------------------
@@ -577,6 +577,7 @@ adminUi.get('/customers/:id', async (c) => {
   const ents = await customers.listCustomerEntitlements(sql, cu.id);
   const offers = await sql<{ sku: string; name: string; status: string }[]>`SELECT sku, name, status FROM offers WHERE status <> 'archived' ORDER BY name`;
   const purchases = await sql<{ id: string; source: string; currency: string; amount_total: number; status: string; created_at: Date }[]>`SELECT id, source, currency, amount_total, status, created_at FROM purchases WHERE customer_id = ${cu.id} ORDER BY created_at DESC`;
+  const invoices = await listInvoices(sql, cu.id);
   return render(c, {
     title: cu.display_name,
     body: (
@@ -604,9 +605,23 @@ adminUi.get('/customers/:id', async (c) => {
         <div class="table-wrap"><table><thead><tr><th>Purchase</th><th>Source</th><th>Total</th><th>Status</th><th>When</th></tr></thead><tbody>
           {purchases.map((p) => <tr><td><code>{p.id}</code></td><td>{p.source}</td><td>{p.source === 'admin_grant' ? '—' : money(p.amount_total, p.currency)}</td><td><Badge v={p.status} /></td><td>{fmt(p.created_at)}</td></tr>)}
         </tbody></table></div>
+        <h2>Invoices (paid)</h2>
+        {invoices.length === 0 ? <p class="muted">No invoices yet.</p> : (
+          <div class="table-wrap"><table><thead><tr><th>Invoice</th><th>Kind</th><th>Total</th><th>Issued</th><th></th></tr></thead><tbody>
+            {invoices.map((i) => <tr><td>{invoiceNumber(c.get('deps').config, i.number, i.livemode)}</td><td>{i.kind}</td><td>{money(i.total, i.currency)}</td><td>{fmt(i.issued_at)}</td><td><a href={`/admin/invoices/${i.id}.pdf`}>PDF</a></td></tr>)}
+          </tbody></table></div>
+        )}
       </>
     ),
   });
+});
+
+adminUi.get('/invoices/:file', async (c) => {
+  if (!can(c, 'customers:read')) throw new AppError('forbidden', 'Missing permission customers:read');
+  const id = c.req.param('file').replace(/\.pdf$/, '');
+  const { sql, config } = c.get('deps');
+  const inv = await getInvoice(sql, id);
+  return pdfResponse(renderInvoicePdf(config, inv), `${invoiceNumber(config, inv.number, inv.livemode)}.pdf`);
 });
 
 adminUi.post('/customers/:id/grant', action(async (c, f) => {
@@ -865,11 +880,10 @@ adminUi.get('/billing', async (c) => {
         <h1>Billing and integrations</h1>
         {rec ? <div class="card"><form class="inline" method="post" action="/admin/billing/reconcile"><Csrf token={c.get('csrf')} /><input type="hidden" name="kind" value="checkouts" /><button type="submit">Reconcile open checkouts</button></form>
           <form class="inline" method="post" action="/admin/billing/reconcile"><Csrf token={c.get('csrf')} /><input type="hidden" name="kind" value="subscriptions" /><button type="submit">Reconcile subscriptions</button></form>
-          <form class="inline" method="post" action="/admin/billing/reconcile"><Csrf token={c.get('csrf')} /><input type="hidden" name="kind" value="backfill" /><button class="secondary" type="submit">Backfill Stripe events (3 days)</button></form>
-          {can(c, 'stripe:sync') ? <form class="inline" method="post" action="/admin/billing/drift"><Csrf token={c.get('csrf')} /><button class="secondary" type="submit">Check Stripe drift</button></form> : null}</div> : null}
-        <h2>Stripe price mappings</h2>
-        <div class="table-wrap"><table><thead><tr><th>SKU</th><th>Price version</th><th>Amount</th><th>Status</th><th>Stripe price</th><th>Sync</th><th>Drift / error</th></tr></thead><tbody>
-          {mappings.map((m) => <tr><td>{String(m.sku)}</td><td><code>{String(m.price_version_id)}</code></td><td>{money(Number(m.unit_amount), String(m.currency))}{m.recurring_interval ? `/${m.recurring_interval}` : ''}</td><td><Badge v={String(m.price_status)} /></td><td><code>{String(m.stripe_price_id ?? '—')}</code></td><td><Badge v={String(m.sync_state)} /></td><td class="muted">{m.drift_detail ? JSON.stringify(m.drift_detail) : String(m.last_error ?? '')}</td></tr>)}
+          <form class="inline" method="post" action="/admin/billing/reconcile"><Csrf token={c.get('csrf')} /><input type="hidden" name="kind" value="backfill" /><button class="secondary" type="submit">Backfill Stripe events (3 days)</button></form></div> : null}
+        <h2>Stripe products (one per offer; prices are sent inline from the database)</h2>
+        <div class="table-wrap"><table><thead><tr><th>SKU</th><th>Offer</th><th>Stripe product</th><th>Sync</th><th>Error</th></tr></thead><tbody>
+          {mappings.map((m) => <tr><td>{m.sku}</td><td>{m.offer_name} <Badge v={m.offer_status} /></td><td><code>{m.stripe_product_id ?? '—'}</code></td><td><Badge v={m.sync_state} /></td><td class="muted">{m.last_error ?? ''}</td></tr>)}
         </tbody></table></div>
         <h2>Checkouts</h2>
         <div class="table-wrap"><table><thead><tr><th>Checkout</th><th>SKU</th><th>Email</th><th>Expected</th><th>Status</th><th>Created</th><th>Note</th></tr></thead><tbody>
@@ -899,11 +913,6 @@ adminUi.post('/billing/reconcile', action(async (c, f) => {
   else if (f.kind === 'subscriptions') msg = (await billing.reconcileSubscriptions(sql, config, stripe, 10)).join(' | ') || 'No live subscriptions';
   else msg = JSON.stringify(await billing.backfillEvents(sql, stripe, a, Math.floor(Date.now() / 1000) - 3 * 86400));
   return back(c, '/admin/billing', msg.slice(0, 280));
-}));
-adminUi.post('/billing/drift', action(async (c) => {
-  if (!can(c, 'stripe:sync')) throw new AppError('forbidden', 'Missing permission stripe:sync');
-  const r = await stripeSync.checkDrift(c.get('deps').sql, c.get('deps').stripe, 20);
-  return back(c, '/admin/billing', `Checked ${r.checked} mapping(s); ${r.drifted} drifted`);
 }));
 adminUi.post('/billing/events/:id/replay', action(async (c) => (await billing.replayStripeEvent(c.get('deps').sql, c.get('actor'), c.req.param('id')!), back(c, '/admin/billing', 'Event queued for replay'))));
 adminUi.post('/billing/jobs/:id/retry', action(async (c) => {

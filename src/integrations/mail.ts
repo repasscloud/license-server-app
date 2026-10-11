@@ -27,6 +27,8 @@ export interface OutgoingMail {
   tags: string[];
   /** Our outbox id; MailerSend has no idempotency header, so this is for correlation only. */
   idempotencyKey: string;
+  /** Base64 file attachments (e.g. the paid invoice PDF). */
+  attachments?: Array<{ filename: string; content: string }>;
 }
 
 export interface MailTransport {
@@ -52,6 +54,7 @@ export class MailerSendTransport implements MailTransport {
       tags: m.tags.slice(0, 5),
       settings: { track_clicks: false, track_opens: false, track_content: false },
     };
+    if (m.attachments?.length) body.attachments = m.attachments.map((a) => ({ filename: a.filename, content: a.content, disposition: 'attachment' }));
     if (m.templateId) {
       body.template_id = m.templateId;
       body.subject = m.subject;
@@ -99,7 +102,7 @@ export class CaptureTransport implements MailTransport {
   async send(m: OutgoingMail): Promise<{ messageId: string }> {
     CaptureTransport.captured.push({ ...m, capturedAt: new Date().toISOString() });
     if (CaptureTransport.captured.length > 200) CaptureTransport.captured.shift();
-    console.log(`[mail:capture] NOT DELIVERED (development capture) template=${m.tags[0]} subject=${JSON.stringify(m.subject)}\n${m.text}`);
+    console.log(`[mail:capture] NOT DELIVERED (development capture) template=${m.tags[0]} subject=${JSON.stringify(m.subject)}${m.attachments?.length ? ` attachments=${m.attachments.map((a) => a.filename).join(',')}` : ''}\n${m.text}`);
     return { messageId: `capture:${m.idempotencyKey}` };
   }
 }

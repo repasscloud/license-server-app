@@ -25,12 +25,8 @@ When a purchase is made, the **effective policy** (major + edition policy + comp
 4. **Edition policies:** add the editions this major offers. Combinations the protocol cannot express are rejected with an explanation.
 5. **Signing keys:** record that the release trusts the published keys, then mark them **eligible** (see [runbooks/signing-keys.md](runbooks/signing-keys.md)). Issuance fails closed until this is done.
 6. **Offer:** create it with its components. It starts as a draft.
-7. **Price:** create one price version per currency (AUD, USD, EUR, GBP, CAD, NZD, SGD, HKD, JPY, CNY, CHF). Either:
-   - **register a Price you made in Stripe:** give its `stripePriceId` (`price_…`). A multi-currency Stripe price (with `currency_options`) can back one version per currency. The server checks amount, currency and interval against Stripe; a mismatch shows as *drifted* and the version cannot be activated. If the offer has no Stripe product yet, it adopts the price's product. Or
-   - **let the server create it:** leave `stripePriceId` empty and a matching Stripe Price is created.
-
-   Optional **flat tax**: `taxRatePercent` + `taxLabel` (for example 10 and `GST`) are added on top at checkout as a Stripe Tax Rate (not Stripe Tax): 100 + GST 10% = 110. Then sync ("sync now" or `POST /stripe/sync {wait:true}`) and **Activate** the price.
-8. **Activate the offer.** This is refused unless the protocol combination is valid, the product and major are active, and an active price has a synced Stripe mapping.
+7. **Prices:** on the offer page, **Set prices (all currencies)**, or `POST /offers/{id}/prices`. Every store currency (AUD, USD, EUR, GBP, CAD, NZD, SGD, HKD, JPY, CNY, CHF) needs an amount, in minor units (cents; whole yen for JPY). Prices live only in the database: nothing is created in Stripe, and Checkout sends the amount inline. An offer missing any currency is not shown and cannot be bought. Optional **flat tax** per currency: a rate and label (for example 10 and `GST`), added on top at checkout as a Stripe Tax Rate (not Stripe Tax): 100 + GST 10% = 110.
+8. **Activate the offer.** This is refused unless the protocol combination is valid, the product and major are active, and every store currency has an active price. The offer's Stripe Product is created automatically on the first checkout.
 9. The offer appears in `/store` if it is public, with a currency switcher. Test a purchase in Stripe **test mode**.
 
 ## How the store sells
@@ -39,6 +35,8 @@ When a purchase is made, the **effective policy** (major + edition policy + comp
 - **Business, Enterprise and Education** purchases require business name and country; the business identifier (ABN, VAT, EIN…) is optional. On an existing customer, details typed into the public store only fill empty fields; they never overwrite.
 - **Already owned:** an email with an active licence for the same product, major version and edition cannot buy it again (an expired subscription or fixed term does not count). Upgrades are a different SKU; send the customer a promotion code.
 - **Promotion codes** are enabled on Checkout by default (offer setting). Codes are Stripe *promotion codes* (customer-facing), created in your Stripe account.
+- **Emails are lowercase** everywhere (forms lowercase as you type; the server normalises again), and Checkout always opens on the customer's Stripe customer with the email already filled in.
+- **Invoices:** every successful purchase and every renewal charge gets a numbered **Paid** invoice (seller and ABN, buyer business/name/address/tax ID, lines, discount, tax, total paid, balance due). It is emailed as a PDF and downloadable from the portal (owners, admins and billing members) and the admin customer page. $0 registrations get none.
 - **Billing portal:** "Manage billing" in the customer portal opens Stripe's portal for the customer's single Stripe customer. `STRIPE_CUSTOMER_PORTAL_LOGIN_URL` in `wrangler.jsonc` adds a fallback sign-in link.
 
 Changing a price means creating a new price version and activating it. The old version is archived (in Stripe too) but stays attached to historical purchases and existing subscriptions. Changing what an offer grants means creating a new offer (new SKU) and archiving the old one: components are immutable once the offer exists.

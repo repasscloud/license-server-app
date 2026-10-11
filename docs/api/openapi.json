@@ -1266,6 +1266,100 @@
             "$ref": "#/components/responses/Error"
           }
         }
+      },
+      "post": {
+        "tags": [
+          "Pricing"
+        ],
+        "summary": "Set prices for several currencies at once (creates and, by default, activates one immutable version per currency). An offer sells only when every store currency (AUD USD EUR GBP CAD NZD SGD HKD JPY CNY CHF) has an active price. Optional taxRatePercent + taxLabel add a flat tax on top at checkout",
+        "description": "Requires scope `prices:write`.",
+        "security": [
+          {
+            "adminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "recurringInterval": "year",
+                "prices": [
+                  {
+                    "currency": "AUD",
+                    "unitAmount": 4900,
+                    "taxRatePercent": 10,
+                    "taxLabel": "GST"
+                  },
+                  {
+                    "currency": "USD",
+                    "unitAmount": 3300
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
       }
     },
     "/api/admin/v1/prices": {
@@ -1273,7 +1367,7 @@
         "tags": [
           "Pricing"
         ],
-        "summary": "Create a draft price version (minor units). Optional stripePriceId registers a Price you made in Stripe (verified before activation; may be multi-currency); otherwise a Stripe Price is created. Optional taxRatePercent + taxLabel add a flat tax on top at checkout. Currencies: AUD USD EUR GBP CAD NZD SGD HKD JPY CNY CHF",
+        "summary": "Create one draft price version (minor units; prices exist only in the database and are sent to Stripe inline at checkout)",
         "description": "Requires scope `prices:write`.",
         "security": [
           {
@@ -1302,7 +1396,6 @@
                 "currency": "AUD",
                 "unitAmount": 4900,
                 "recurringInterval": "year",
-                "stripePriceId": "price_…",
                 "taxRatePercent": 10,
                 "taxLabel": "GST"
               }
@@ -1355,7 +1448,7 @@
         "tags": [
           "Pricing"
         ],
-        "summary": "Make a synced price version sellable (archives the previous one)",
+        "summary": "Make a price version sellable (archives the previous one for that currency/interval)",
         "description": "Requires scope `prices:write`.",
         "security": [
           {
@@ -1517,7 +1610,7 @@
         "tags": [
           "Stripe"
         ],
-        "summary": "Stripe product/price mappings and sync/drift state",
+        "summary": "Stripe product per offer and its sync state",
         "description": "Requires scope `prices:read`.",
         "security": [
           {
@@ -1571,7 +1664,7 @@
         "tags": [
           "Stripe"
         ],
-        "summary": "Queue (or with wait:true, run) Stripe sync for an offer/price",
+        "summary": "Queue (or with wait:true, run) creation/update of an offer's Stripe product",
         "description": "Requires scope `stripe:sync`.",
         "security": [
           {
@@ -1596,165 +1689,8 @@
                 "type": "object"
               },
               "example": {
-                "priceVersionId": "prc_…",
+                "offerId": "off_…",
                 "wait": true
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
-          },
-          "403": {
-            "$ref": "#/components/responses/Error"
-          },
-          "404": {
-            "$ref": "#/components/responses/Error"
-          },
-          "409": {
-            "$ref": "#/components/responses/Error"
-          },
-          "412": {
-            "$ref": "#/components/responses/Error"
-          },
-          "422": {
-            "$ref": "#/components/responses/Error"
-          },
-          "429": {
-            "$ref": "#/components/responses/Error"
-          },
-          "503": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/api/admin/v1/stripe/prices/{id}/repair": {
-      "post": {
-        "tags": [
-          "Stripe"
-        ],
-        "summary": "Repair a failed/drifted mapping: retry | reactivate | recreate",
-        "description": "Requires scope `stripe:sync`.",
-        "security": [
-          {
-            "adminToken": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object"
-              },
-              "example": {
-                "action": "retry"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
-          },
-          "403": {
-            "$ref": "#/components/responses/Error"
-          },
-          "404": {
-            "$ref": "#/components/responses/Error"
-          },
-          "409": {
-            "$ref": "#/components/responses/Error"
-          },
-          "412": {
-            "$ref": "#/components/responses/Error"
-          },
-          "422": {
-            "$ref": "#/components/responses/Error"
-          },
-          "429": {
-            "$ref": "#/components/responses/Error"
-          },
-          "503": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/api/admin/v1/stripe/drift-check": {
-      "post": {
-        "tags": [
-          "Stripe"
-        ],
-        "summary": "Compare mapped Stripe prices with the database",
-        "description": "Requires scope `stripe:sync`.",
-        "security": [
-          {
-            "adminToken": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object"
               }
             }
           }
@@ -2032,6 +1968,132 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/admin/v1/customers/{id}/invoices": {
+      "get": {
+        "tags": [
+          "Customers"
+        ],
+        "summary": "Paid invoices issued to a customer",
+        "description": "Requires scope `customers:read`.",
+        "security": [
+          {
+            "adminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/admin/v1/invoices/{id}": {
+      "get": {
+        "tags": [
+          "Customers"
+        ],
+        "summary": "A paid invoice (JSON); add .pdf to the id for the PDF",
+        "description": "Requires scope `customers:read`.",
+        "security": [
+          {
+            "adminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success",

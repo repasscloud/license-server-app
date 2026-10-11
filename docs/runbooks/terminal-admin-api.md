@@ -54,11 +54,15 @@ rp PATCH /majors/$MAJOR '{"status":"active"}' >/dev/null
 rp POST /majors/$MAJOR/releases '{"version":"1.0.0","status":"shipped","isMinimumSupported":true}' >/dev/null
 EP=$(rp PUT /majors/$MAJOR/edition-policies/enterprise '{"displayName":"Enterprise","activationModel":"none","ownership":"organisation"}' | jq -r .id)
 
-# Create an offer and a DB price (minor units), sync it to Stripe test mode, activate it
+# Create an offer and its prices in EVERY store currency (minor units; JPY in whole yen).
+# Prices live only in the database; GST is added on top of the AUD price at checkout.
 OFFER=$(rp POST /offers "{\"sku\":\"newapp1-ent\",\"name\":\"NewApp 1 Enterprise\",\"kind\":\"single\",\"billing\":\"one_time\",\"components\":[{\"editionPolicyId\":\"$EP\",\"termType\":\"perpetual\"}]}" | jq -r .id)
-PRICE=$(rp POST /prices "{\"offerId\":\"$OFFER\",\"currency\":\"AUD\",\"unitAmount\":49900,\"taxBehavior\":\"exclusive\"}" | jq -r .id)
-rp POST /stripe/sync "{\"priceVersionId\":\"$PRICE\",\"wait\":true}" | jq .
-rp POST /prices/$PRICE/activate >/dev/null
+rp POST /offers/$OFFER/prices '{"prices":[
+  {"currency":"AUD","unitAmount":49900,"taxRatePercent":10,"taxLabel":"GST"},
+  {"currency":"USD","unitAmount":32900},{"currency":"EUR","unitAmount":30900},{"currency":"GBP","unitAmount":26900},
+  {"currency":"CAD","unitAmount":44900},{"currency":"NZD","unitAmount":54900},{"currency":"SGD","unitAmount":43900},
+  {"currency":"HKD","unitAmount":256900},{"currency":"JPY","unitAmount":49800},{"currency":"CNY","unitAmount":236900},
+  {"currency":"CHF","unitAmount":28900}]}' | jq '.missingCurrencies'
 rp POST /offers/$OFFER/status '{"status":"active"}' | jq '{sku, status}'
 
 # Issue (grant) an entitlement — the activation key is returned ONCE
@@ -68,6 +72,10 @@ rp POST /entitlements/grants '{"customerId":"cus_…","offerSku":"newapp1-ent","
 rp POST /licenses/lic_…/revoke '{"reason":"chargeback","confirm":"lic_…"}' | jq .
 rp POST /licenses/lic_…/unrevoke '{"reason":"dispute won","confirm":"lic_…"}' | jq .
 rp POST /licenses/lic_…/reissue '{"reason":"organisation renamed","organisationName":"New Name Pty Ltd"}' | jq '.envelope.signatures[].keyId'
+
+# Paid invoices of a customer, and one as PDF
+rp GET /customers/cus_…/invoices | jq '.data[] | {id, number, total, currency, issued_at}'
+rp GET /invoices/cin_….pdf '' -o invoice.pdf   # '' = no JSON body; extra args go to curl
 
 # Failed webhooks, dead jobs, email outbox
 rp GET '/webhooks/stripe/events?status=failed' | jq '.data[] | {id, type, attempts, last_error}'

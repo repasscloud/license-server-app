@@ -73,6 +73,8 @@ async function webhook(type: string, object: Record<string, unknown>, opts: { id
   return { res, id: ev.id, json: (await res.json()) as any };
 }
 
+const CURRENCIES = ['aud', 'usd', 'eur', 'gbp', 'cad', 'nzd', 'sgd', 'hkd', 'jpy', 'cny', 'chf'];
+
 // Business name the store form sends per buyer (organisation editions require it).
 const BUSINESS: Record<string, string> = { 'it@example.org': 'Example Org Pty Ltd', 'buyer@corp.example': 'Corp', 'suite@buyer.example': 'Suite Buyer Ltd', 'mailfail@buyer.example': 'MF' };
 
@@ -176,31 +178,25 @@ describe('catalogue onboarding through the admin API (no redeploy, data only)', 
     expect(early.status).toBe(412);
   });
 
-  it('creates DB prices, syncs immutable Stripe prices, activates offers', async () => {
-    const prices: Array<[string, Record<string, unknown>]> = [
-      ['cd2-business-annual', { currency: 'AUD', unitAmount: 4900, recurringInterval: 'year', taxBehavior: 'exclusive' }],
-      ['cd2-community-reg', { currency: 'aud', unitAmount: 0 }],
-      ['cd2-enterprise', { currency: 'aud', unitAmount: 99900 }],
-      ['suite-enterprise', { currency: 'aud', unitAmount: 149900 }],
-    ];
-    // Zero price is refused for paid offers.
+  it('sets prices in every store currency in the database (no Stripe prices), then activates offers', async () => {
+    // Zero price is refused for paid offers; unsupported currencies are refused.
     expect((await api('POST', '/prices', { offerId: ids['offer_cd2-enterprise'], currency: 'aud', unitAmount: 0 })).status).toBe(422);
-    for (const [sku, p] of prices) {
-      const created = await ok('POST', '/prices', { offerId: ids[`offer_${sku}`], ...p });
-      ids[`price_${sku}`] = created.id;
-      expect(created.sync_state).toBe('pending');
-      const synced = await ok('POST', '/stripe/sync', { priceVersionId: created.id, wait: true });
-      expect(synced.stripePriceId).toMatch(/^price_/);
-      await ok('POST', `/prices/${created.id}/activate`);
+    expect((await api('POST', '/prices', { offerId: ids['offer_cd2-enterprise'], currency: 'xyz', unitAmount: 100 })).status).toBe(422);
+    // An offer is not sellable until every currency has a price.
+    await ok('POST', `/offers/${ids['offer_cd2-enterprise']}/prices`, { prices: [{ currency: 'AUD', unitAmount: 99900 }] });
+    const early = await api('POST', `/offers/${ids['offer_cd2-enterprise']}/status`, { status: 'active' });
+    expect(early.status).toBe(412);
+    expect(early.body.error.message).toMatch(/missing USD, EUR, GBP, CAD, NZD, SGD, HKD, JPY, CNY, CHF/);
+    const offers: Array<[string, number, string | null]> = [['cd2-business-annual', 4900, 'year'], ['cd2-community-reg', 0, null], ['cd2-enterprise', 99900, null], ['suite-enterprise', 149900, null]];
+    for (const [sku, amount, interval] of offers) {
+      const set = await ok('POST', `/offers/${ids[`offer_${sku}`]}/prices`, { recurringInterval: interval, prices: CURRENCIES.filter((c) => !(sku === 'cd2-enterprise' && c === 'aud')).map((c) => ({ currency: c, unitAmount: amount })) });
+      expect(set.missingCurrencies).toEqual([]);
+      ids[`price_${sku}`] = sku === 'cd2-enterprise' ? (await sql<{ id: string }[]>`SELECT id FROM price_versions WHERE offer_id = ${ids['offer_cd2-enterprise']!} AND currency = 'aud'`)[0]!.id
+        : set.prices.find((p: any) => p.currency === 'aud').id;
       await ok('POST', `/offers/${ids[`offer_${sku}`]}/status`, { status: 'active' });
     }
-    const req = stripe.requests.find((r) => r.path === '/v1/prices' && r.params.unit_amount === '4900')!;
-    expect(req.params).toMatchObject({ currency: 'aud', recurring: { interval: 'year', interval_count: '1' }, tax_behavior: 'exclusive' });
-    expect(req.idempotencyKey).toBe(`repass-price-${ids['price_cd2-business-annual']}`);
-    expect(req.stripeVersion).toBe('2026-09-30.endive');
-    // Queued sync jobs are idempotent (Stripe idempotency key) and complete cleanly.
-    await drain();
-    expect(stripe.prices.size).toBe(4);
+    // Prices are never Stripe objects.
+    expect(stripe.requests.filter((r) => r.path === '/v1/prices').length).toBe(0);
     // Immutable price history: amount changes are rejected at the database level.
     await expect(sql`UPDATE price_versions SET unit_amount = 1 WHERE id = ${ids['price_cd2-enterprise']!}`).rejects.toThrow(/immutable/);
   });
@@ -216,9 +212,12 @@ describe('server-created checkout and verified fulfilment', () => {
     const sent = stripe.requests.filter((r) => r.path === '/v1/checkout/sessions');
     expect(sent.length).toBe(1);
     const p = sent[0]!.params as any;
-    expect(p.line_items[0]).toEqual({ price: stripe.prices.get([...stripe.prices.keys()][0]!)!.id, quantity: '3' });
-    expect(JSON.stringify(p)).not.toMatch(/unit_amount/);
+    // The amount is sent inline from the database price version, against the offer's Stripe product.
+    const [pm] = await sql<{ stripe_product_id: string }[]>`SELECT stripe_product_id FROM stripe_product_mappings WHERE offer_id = ${ids['offer_cd2-business-annual']!}`;
+    expect(p.line_items[0]).toEqual({ price_data: { currency: 'aud', unit_amount: '4900', product: pm!.stripe_product_id, recurring: { interval: 'year', interval_count: '1' } }, quantity: '3' });
     expect(p.mode).toBe('subscription');
+    expect(p.customer).toMatch(/^cus_/);
+    expect(p.customer_email).toBeUndefined();
     expect(p.success_url).toMatch(/\/checkout\/chk_.*\/return\?session_id=\{CHECKOUT_SESSION_ID\}$/);
     // Same idempotency key -> same session, no new Stripe session.
     const c2 = await checkout('cd2-business-annual', 'it@example.org', 3, 'ck_business_aaaaaaaaaaaa');
@@ -322,6 +321,14 @@ describe('server-created checkout and verified fulfilment', () => {
     await drain();
     const [still] = await sql<{ expires_at: Date }[]>`SELECT expires_at FROM entitlements`;
     expect(still!.expires_at.getTime()).toBe(after!.expires_at.getTime());
+    // Each renewal charge gets one paid invoice and a receipt email with it attached (the first
+    // charge was covered by the purchase invoice).
+    const renewals = await sql<{ id: string; total: number }[]>`SELECT id, total FROM customer_invoices WHERE kind = 'renewal'`;
+    expect(renewals).toEqual([{ id: expect.stringMatching(/^cin_/), total: 1000 }]);
+    expect((await sql`SELECT 1 FROM customer_invoices WHERE stripe_invoice_id = ${old.id}`).length).toBe(0);
+    await sendMail();
+    const receipt = mail.sent.find((m) => /^Receipt TEST-RPL-\d{7}: /.test(m.subject))!;
+    expect(receipt.attachments).toEqual([{ filename: expect.stringMatching(/^TEST-RPL-\d{7}\.pdf$/), content: expect.any(String), disposition: 'attachment' }]);
     const dev = new Client(env);
     const r = (await (await dev.request(`/v1/licenses/${ids.licenseId}/renew`, { method: 'POST', json: { productId: 'cursedelete', majorVersion: 2 } })).json()) as any;
     const v = await verifyEnvelope(JSON.stringify(r.license), 'repass-license-v1', trusted);
@@ -418,12 +425,7 @@ describe('free registration, async payment, refunds, bundles', () => {
 
 describe('pricing changes, drift and provider outages', () => {
   it('a new price version supersedes the old for new sales only', async () => {
-    const created = await ok('POST', '/prices', { offerId: ids['offer_cd2-enterprise'], currency: 'aud', unitAmount: 119900 });
-    await ok('POST', '/stripe/sync', { priceVersionId: created.id, wait: true });
-    await ok('POST', `/prices/${created.id}/activate`);
-    await drain(); // archive job deactivates the old Stripe price
-    const oldStripe = (await sql<{ stripe_price_id: string }[]>`SELECT stripe_price_id FROM stripe_price_mappings WHERE price_version_id = ${ids['price_cd2-enterprise']!}`)[0]!.stripe_price_id;
-    expect(stripe.prices.get(oldStripe)!.active).toBe(false);
+    await ok('POST', `/offers/${ids['offer_cd2-enterprise']}/prices`, { prices: [{ currency: 'aud', unitAmount: 119900 }] });
     const c = await checkout('cd2-enterprise', 'new@buyer.example');
     const s = stripe.sessions.get(sessionIdFrom(c.location))!;
     expect(s.amount_subtotal).toBe(119900);
@@ -431,17 +433,14 @@ describe('pricing changes, drift and provider outages', () => {
     expect((await sql`SELECT 1 FROM purchase_lines WHERE unit_amount = 99900`).length).toBe(1);
   });
 
-  it('drift in Stripe blocks sales until explicitly repaired', async () => {
-    const pv = (await sql<{ price_version_id: string; stripe_price_id: string }[]>`
-      SELECT m.price_version_id, m.stripe_price_id FROM stripe_price_mappings m JOIN price_versions p ON p.id = m.price_version_id
-      WHERE p.offer_id = ${ids['offer_cd2-community-reg']!} AND p.status = 'active'`)[0]!;
-    stripe.prices.get(pv.stripe_price_id)!.active = false; // someone archived it in the Stripe dashboard
-    await ok('POST', '/stripe/drift-check');
-    const c = await checkout('cd2-community-reg', 'x@y.example');
-    expect(c.res.status).toBe(412);
-    await ok('POST', `/stripe/prices/${pv.price_version_id}/repair`, { action: 'reactivate' });
-    const c2 = await checkout('cd2-community-reg', 'x@y.example');
-    expect(c2.res.status).toBe(303);
+  it('an offer missing a price in any currency is hidden and cannot be bought', async () => {
+    const [usd] = await sql<{ id: string }[]>`SELECT id FROM price_versions WHERE offer_id = ${ids['offer_cd2-community-reg']!} AND currency = 'usd' AND status = 'active'`;
+    await ok('POST', `/prices/${usd!.id}/archive`);
+    expect(await (await new Client(env).request('/store')).text()).not.toMatch(/Community registration/);
+    expect((await checkout('cd2-community-reg', 'x@y.example')).res.status).toBe(412);
+    await ok('POST', `/offers/${ids['offer_cd2-community-reg']}/prices`, { prices: [{ currency: 'usd', unitAmount: 0 }] });
+    expect(await (await new Client(env).request('/store')).text()).toMatch(/Community registration/);
+    expect((await checkout('cd2-community-reg', 'x@y.example')).res.status).toBe(303);
   });
 
   it('Stripe outage: checkout fails truthfully, retry with the same key succeeds', async () => {
@@ -644,26 +643,13 @@ describe('store: one customer per email, flat tax, prices registered from Stripe
     SELECT id, organisation_name, country, tax_id, stripe_customer_id FROM customers WHERE billing_email = ${email}`;
   const sessionParams = () => stripe.requests.filter((r) => r.path === '/v1/checkout/sessions').at(-1)!.params as any;
 
-  it('registers a multi-currency Stripe price per currency, verified before it can be sold', async () => {
+  it('prices every currency in the database, with a flat tax per currency', async () => {
     ids.offer_edu = (await ok('POST', '/offers', { sku: 'cd2-education', name: 'Education perpetual', kind: 'single', billing: 'one_time', components: [{ editionPolicyId: ids.ep_education, termType: 'perpetual' }] })).id;
-    const made = stripe.createPriceDirect({ currency: 'aud', unitAmount: 10000, currencyOptions: { usd: 7000 } });
-    const before = stripe.requests.filter((r) => r.method === 'POST' && (r.path === '/v1/prices' || r.path === '/v1/products')).length;
-    const aud = await ok('POST', '/prices', { offerId: ids.offer_edu, currency: 'AUD', unitAmount: 10000, stripePriceId: made.id, taxRatePercent: 10, taxLabel: 'GST' });
-    const usd = await ok('POST', '/prices', { offerId: ids.offer_edu, currency: 'USD', unitAmount: 7000, stripePriceId: made.id });
-    for (const p of [aud, usd]) expect((await ok('POST', '/stripe/sync', { priceVersionId: p.id, wait: true })).stripePriceId).toBe(made.id);
-    // Nothing was created in Stripe: the owner's price and product were adopted.
-    expect(stripe.requests.filter((r) => r.method === 'POST' && (r.path === '/v1/prices' || r.path === '/v1/products')).length).toBe(before);
-    const [pm] = await sql<{ stripe_product_id: string }[]>`SELECT stripe_product_id FROM stripe_product_mappings WHERE offer_id = ${ids.offer_edu!}`;
-    expect(pm!.stripe_product_id).toBe(made.product);
-    // A currency the Stripe price does not carry is drift, and cannot be activated.
-    const eur = await ok('POST', '/prices', { offerId: ids.offer_edu, currency: 'EUR', unitAmount: 6000, stripePriceId: made.id });
-    await api('POST', '/stripe/sync', { priceVersionId: eur.id, wait: true });
-    expect((await api('POST', `/prices/${eur.id}/activate`)).status).toBe(412);
-    // Same Stripe price twice for one currency, or an unsupported currency, are refused.
-    expect((await api('POST', '/prices', { offerId: ids.offer_edu, currency: 'AUD', unitAmount: 10000, stripePriceId: made.id })).status).toBe(409);
-    expect((await api('POST', '/prices', { offerId: ids.offer_edu, currency: 'XYZ', unitAmount: 100 })).status).toBe(422);
-    await ok('POST', `/prices/${aud.id}/activate`);
-    await ok('POST', `/prices/${usd.id}/activate`);
+    const set = await ok('POST', `/offers/${ids.offer_edu}/prices`, { prices: CURRENCIES.map((c) => (c === 'aud' ? { currency: 'AUD', unitAmount: 10000, taxRatePercent: 10, taxLabel: 'GST' } : c === 'usd' ? { currency: 'usd', unitAmount: 7000 } : { currency: c, unitAmount: c === 'jpy' ? 9800 : 6500 })) });
+    expect(set.missingCurrencies).toEqual([]);
+    expect(set.prices.find((p: any) => p.currency === 'aud')).toMatchObject({ unit_amount: 10000, tax_rate_bps: 1000, tax_label: 'GST', status: 'active' });
+    // Tax rate and label go together.
+    expect((await api('POST', '/prices', { offerId: ids.offer_edu, currency: 'aud', unitAmount: 1, taxRatePercent: 10 })).status).toBe(422);
     await ok('POST', `/offers/${ids.offer_edu}/status`, { status: 'active' });
   });
 
@@ -674,8 +660,10 @@ describe('store: one customer per email, flat tax, prices registered from Stripe
     expect(html).toMatch(/data-price="aud" hidden=""><b>110\.00 AUD<\/b> incl\. GST/);
     expect(html).toMatch(/100\.00 AUD \+ GST 10% \(10\.00 AUD\)/);
     expect(html).toMatch(/name="businessName" required/); // education needs business details
-    const js = await new Client(env).request('/assets/store.js');
+    expect(html).toMatch(/98 JPY|9,800 JPY/); // zero-decimal currency
+    const js = await new Client(env).request('/assets/app.js');
     expect(js.headers.get('content-type')).toMatch(/javascript/);
+    expect(await js.text()).toMatch(/toLowerCase/);
   });
 
   it('creates one customer and one Stripe customer per email; Checkout opens on it with tax and coupons', async () => {
@@ -719,6 +707,38 @@ describe('store: one customer per email, flat tax, prices registered from Stripe
     await sql`UPDATE entitlements e SET expires_at = now() - interval '1 day' FROM customers c
               WHERE c.id = e.customer_id AND c.billing_email = 'it@example.org' AND e.term_type = 'subscription'`;
     expect((await checkout('cd2-business-annual', 'it@example.org')).res.status).toBe(303);
+  });
+
+  it('issues a numbered paid tax invoice, emails it as a PDF and serves it to the customer only', async () => {
+    const [inv] = await sql<{ id: string; number: number; kind: string; subtotal: number; tax: number; total: number; snapshot: any }[]>`
+      SELECT i.id, i.number, i.kind, i.subtotal, i.tax, i.total, i.snapshot FROM customer_invoices i JOIN customers c ON c.id = i.customer_id WHERE c.billing_email = ${EMAIL}`;
+    expect(inv).toMatchObject({ kind: 'purchase', subtotal: 10000, tax: 1000, total: 11000 });
+    expect(inv!.snapshot).toMatchObject({ taxLabel: 'GST 10%', buyer: { businessName: 'Example School', email: EMAIL, taxId: '51 824 753 556' }, seller: { email: config.supportEmail } });
+    await expect(sql`UPDATE customer_invoices SET total = 1 WHERE id = ${inv!.id}`).rejects.toThrow(/append-only/);
+    await sendMail();
+    const msg = mail.sent.find((m) => m.to[0].email === EMAIL && /licence is ready/.test(m.subject))!;
+    const no = `TEST-RPL-${String(inv!.number).padStart(7, '0')}`;
+    expect(msg.text).toMatch(new RegExp(`Your paid invoice ${no} is attached`));
+    expect(msg.attachments[0].filename).toBe(`${no}.pdf`);
+    const pdf = Buffer.from(msg.attachments[0].content, 'base64').toString('latin1');
+    expect(pdf.startsWith('%PDF-1.4')).toBe(true);
+    for (const t of ['Tax Invoice', 'PAID', no, 'Example School', 'GST 10%', '110.00 AUD', 'Balance due', 'TEST MODE']) expect(pdf).toContain(`(${t}`);
+    // Admin API lists and downloads it; free registrations get no invoice.
+    const [cust] = await custRows(EMAIL);
+    expect((await ok('GET', `/customers/${cust!.id}/invoices`)).data.length).toBe(1);
+    const dl = await admin.request(`/api/admin/v1/invoices/${inv!.id}.pdf`, { token });
+    expect(dl.headers.get('content-type')).toBe('application/pdf');
+    expect((await sql`SELECT 1 FROM customer_invoices i JOIN customers c ON c.id = i.customer_id WHERE c.billing_email = 'jane@example.net'`).length).toBe(0);
+    // Another customer's portal session cannot download it.
+    const other = new Client(env);
+    const csrf = await other.csrfFrom('/portal/login');
+    await other.request('/portal/login', { method: 'POST', form: { _csrf: csrf, email: 'jane@example.net' } });
+    await sendMail();
+    const link = new URL(/https?:\/\/\S+\/portal\/auth\/verify\?token=[A-Za-z0-9_-]+/.exec([...mail.sent].reverse().find((m) => m.to[0].email === 'jane@example.net')!.text)![0]);
+    const vcsrf = await other.csrfFrom(link.pathname + link.search);
+    await other.request('/portal/auth/verify', { method: 'POST', form: { _csrf: vcsrf, token: link.searchParams.get('token')! } });
+    const denied = await other.request(`/portal/invoices/${inv!.id}.pdf`);
+    expect(denied.headers.get('content-type')).not.toBe('application/pdf');
   });
 
   it('reuses a Stripe customer that already exists for the email (shared Stripe account)', async () => {

@@ -152,3 +152,8 @@ export function kickEmailDispatch(c: Ctx) {
     }
   })());
 }
+
+/** A private, non-cacheable PDF download. */
+export function pdfResponse(bytes: Uint8Array<ArrayBuffer>, filename: string): Response {
+  return new Response(bytes, { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${filename.replace(/[^A-Za-z0-9._-]/g, '_')}"`, 'Cache-Control': 'private, no-store' } });
+}

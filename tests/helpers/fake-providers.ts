@@ -156,8 +156,17 @@ export class FakeStripe {
     }
     if (method === 'POST' && path === '/v1/checkout/sessions') {
       const id = sid('cs_test');
-      const li = (p.line_items as Array<{ price: string; quantity: string; tax_rates?: string[] }>)[0]!;
-      const price = this.prices.get(li.price) as Record<string, any> | undefined;
+      const li = (p.line_items as Array<{ price?: string; price_data?: Record<string, any>; quantity: string; tax_rates?: string[] }>)[0]!;
+      let price = li.price ? (this.prices.get(li.price) as Record<string, any> | undefined) : undefined;
+      if (li.price_data) {
+        // Inline price (Checkout creates a one-off Price object for the session).
+        const d = li.price_data;
+        if (!this.products.has(d.product)) return null;
+        const pid = sid('price');
+        price = { id: pid, object: 'price', active: false, currency: d.currency, unit_amount: Number(d.unit_amount), product: d.product, tax_behavior: d.tax_behavior ?? 'unspecified',
+          recurring: d.recurring ? { interval: d.recurring.interval, interval_count: Number(d.recurring.interval_count ?? 1) } : null, metadata: {} };
+        this.prices.set(pid, price);
+      }
       if (!price) return null;
       if (p.customer && !this.customers.has(p.customer)) return null;
       const currency = p.currency ?? price.currency;
@@ -174,7 +183,7 @@ export class FakeStripe {
         customer_email: p.customer ? this.customers.get(p.customer)!.email : p.customer_email ?? null,
         customer_details: null, currency, amount_subtotal: subtotal, amount_total: subtotal + tax,
         total_details: { amount_discount: 0, amount_tax: tax }, payment_intent: null, subscription: null, invoice: null,
-        _line_items: [{ price: { id: li.price }, quantity: qty }], _params: p,
+        _line_items: [{ price: { id: price.id, unit_amount: unit, currency, product: price.product, recurring: price.recurring }, quantity: qty }], _params: p,
       };
       this.sessions.set(id, o);
       return o;
@@ -235,18 +244,18 @@ export class FakeStripe {
         metadata: s._params.subscription_data?.metadata ?? {}, items: { data: [{ quantity: s._line_items[0].quantity, current_period_start: now, current_period_end: end, price: { id: s._line_items[0].price.id } }] },
       });
       s.subscription = subId;
-      const inv = this.addInvoice(subId, now, end, s.amount_total);
+      const inv = this.addInvoice(subId, now, end, s.amount_total, 'paid', 'subscription_create');
       s.invoice = inv.id;
     }
     return s;
   }
 
-  addInvoice(subId: string, start: number, end: number, amount: number, status = 'paid') {
+  addInvoice(subId: string, start: number, end: number, amount: number, status = 'paid', billingReason = 'subscription_cycle') {
     const id = sid('in');
     const pi = sid('pi');
-    const inv = { id, object: 'invoice', status, billing_reason: 'subscription_cycle', currency: 'aud', customer: this.subscriptions.get(subId)?.customer, amount_due: amount, amount_paid: status === 'paid' ? amount : 0,
+    const inv = { id, object: 'invoice', livemode: false, status, billing_reason: billingReason, currency: 'aud', subtotal: amount, total: amount, total_discount_amounts: [], customer: this.subscriptions.get(subId)?.customer, amount_due: amount, amount_paid: status === 'paid' ? amount : 0,
       total_taxes: [], hosted_invoice_url: `https://invoice.stripe.com/i/${id}`, parent: { subscription_details: { subscription: subId } }, status_transitions: { paid_at: status === 'paid' ? start : null },
-      lines: { data: [{ period: { start, end } }] }, attempt_count: 1, _payment_intent: pi };
+      lines: { data: [{ period: { start, end }, description: '1 × renewal', quantity: 1, amount }] }, attempt_count: 1, _payment_intent: pi };
     this.invoices.set(id, inv);
     this.charges.set(`ch_for_${pi}`, { id: `ch_for_${pi}`, payment_intent: pi, amount, amount_refunded: 0, refunded: false });
     return inv;

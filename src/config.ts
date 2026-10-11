@@ -29,6 +29,10 @@ export interface Env {
   STRIPE_API_BASE?: string;
   /** Optional Stripe customer-portal login link (https://billing.stripe.com/p/login/…), shown as a fallback. */
   STRIPE_CUSTOMER_PORTAL_LOGIN_URL?: string;
+  /** Seller details printed on invoices. */
+  INVOICE_SELLER_NAME?: string;
+  INVOICE_SELLER_ABN?: string;
+  INVOICE_NUMBER_PREFIX?: string;
   MAILERSEND_API_BASE?: string;
   [k: string]: unknown;
 }
@@ -52,6 +56,7 @@ export interface Config {
   stripeApiVersion: string;
   stripeApiBase: string;
   stripePortalLoginUrl: string | null;
+  invoice: { sellerName: string; sellerAbn: string | null; prefix: string };
   mailerSendApiBase: string;
   mailTransport: MailTransportKind;
   secureCookies: boolean;
@@ -94,6 +99,11 @@ export function loadConfig(env: Env): Config {
     supportEmail: env.SUPPORT_EMAIL,
     stripeApiVersion: env.STRIPE_API_VERSION,
     stripeApiBase: !deployed && env.STRIPE_API_BASE ? env.STRIPE_API_BASE : 'https://api.stripe.com',
+    invoice: {
+      sellerName: env.INVOICE_SELLER_NAME?.trim() || 'RePassCloud',
+      sellerAbn: env.INVOICE_SELLER_ABN?.replace(/\s+/g, '') || null,
+      prefix: /^[A-Z0-9]{2,10}$/.test(env.INVOICE_NUMBER_PREFIX ?? '') ? env.INVOICE_NUMBER_PREFIX! : 'RPL',
+    },
     stripePortalLoginUrl: /^https:\/\/billing\.stripe\.com\/p\/login\/[A-Za-z0-9_]+$/.test(env.STRIPE_CUSTOMER_PORTAL_LOGIN_URL ?? '') ? env.STRIPE_CUSTOMER_PORTAL_LOGIN_URL! : null,
     mailerSendApiBase: !deployed && env.MAILERSEND_API_BASE ? env.MAILERSEND_API_BASE : 'https://api.mailersend.com',
     mailTransport,

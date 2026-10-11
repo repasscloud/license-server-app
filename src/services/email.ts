@@ -7,13 +7,14 @@ import type { Config } from '../config.ts';
 import { appDataAad, openCompact, sealCompact } from '../crypto/aead.ts';
 import { hmac } from '../crypto/hashing.ts';
 import { toBytes, type Db, type Sql } from '../db/client.ts';
-import { decodeUtf8, encodeUtf8, hexEncode } from '../lib/encoding.ts';
+import { base64Encode, decodeUtf8, encodeUtf8, hexEncode } from '../lib/encoding.ts';
 import { invalid, notFound } from '../lib/errors.ts';
 import { newId } from '../lib/ids.ts';
 import { requirePermission, type Actor } from './actor.ts';
 import { audit } from './audit.ts';
 import { backoffSeconds } from './jobs.ts';
-import { MailError, type MailTransport } from '../integrations/mail.ts';
+import { MailError, type MailTransport, type OutgoingMail } from '../integrations/mail.ts';
+import { getInvoice, invoiceNumber, renderInvoicePdf } from './invoices.ts';
 
 export type EmailCategory = 'transactional' | 'security' | 'marketing';
 
@@ -26,6 +27,8 @@ export interface EmailRequest {
   /** Pre-rendered HTML fragments built by the server from escaped data (never user input). */
   rawHtml?: Record<string, string>;
   category?: EmailCategory;
+  /** Attach this paid invoice as a PDF (rendered at send time from its immutable snapshot). */
+  invoiceId?: string | null;
 }
 
 export async function recipientHash(config: Config, email: string): Promise<string> {
@@ -38,7 +41,7 @@ export async function enqueueEmail(db: Db, config: Config, req: EmailRequest): P
   if (category === 'marketing') throw invalid('Marketing email is not sent through the transactional outbox');
   const id = newId('eml');
   const rh = await recipientHash(config, req.to);
-  const sealed = await sealCompact(config.appDataKeys, encodeUtf8(JSON.stringify({ to: req.to, toName: req.toName ?? null, vars: req.vars, rawHtml: req.rawHtml ?? {} })), appDataAad('email-outbox', id));
+  const sealed = await sealCompact(config.appDataKeys, encodeUtf8(JSON.stringify({ to: req.to, toName: req.toName ?? null, vars: req.vars, rawHtml: req.rawHtml ?? {}, invoiceId: req.invoiceId ?? null })), appDataAad('email-outbox', id));
   const rows = await db<{ id: string }[]>`
     INSERT INTO email_outbox (id, business_key, template_key, category, recipient_hash, payload_ciphertext, payload_key_version)
     VALUES (${id}, ${req.businessKey}, ${req.templateKey}, ${category}, ${rh}, ${sealed.blob}, ${sealed.keyVersion})
@@ -90,13 +93,19 @@ export async function dispatchEmails(sql: Sql, config: Config, transport: MailTr
     try {
       if (!row.payload_ciphertext || !row.payload_key_version) throw new MailError('payload missing', false);
       const payload = JSON.parse(decodeUtf8(await openCompact(config.appDataKeys, toBytes(row.payload_ciphertext), row.payload_key_version, appDataAad('email-outbox', row.id)))) as {
-        to: string; toName: string | null; vars: Record<string, string>; rawHtml: Record<string, string>;
+        to: string; toName: string | null; vars: Record<string, string>; rawHtml: Record<string, string>; invoiceId?: string | null;
       };
       const [tpl] = await sql<{ subject: string; html_body: string; text_body: string; mailersend_template_id: string | null }[]>`
         SELECT subject, html_body, text_body, mailersend_template_id FROM email_templates WHERE template_key = ${row.template_key} AND locale = 'en' AND status = 'active'`;
       if (!tpl) throw new MailError(`template ${row.template_key} missing or disabled`, false);
       const vars = { supportEmail: config.supportEmail, portalUrl: new URL('/portal', config.publicBaseUrl).toString(), ...payload.vars };
+      let attachments: OutgoingMail['attachments'];
+      if (payload.invoiceId) {
+        const inv = await getInvoice(sql, payload.invoiceId);
+        attachments = [{ filename: `${invoiceNumber(config, inv.number, inv.livemode)}.pdf`, content: base64Encode(renderInvoicePdf(config, inv)) }];
+      }
       const result = await transport.send({
+        attachments,
         from: config.mailFrom,
         to: { email: payload.to, name: payload.toName },
         subject: renderTemplate(tpl.subject, vars, {}, false),

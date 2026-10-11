@@ -15,9 +15,10 @@ import { listPublicCatalogue, STORE_CURRENCIES, type StoreOffer } from '../servi
 import { createCheckout, getCheckoutStatus } from '../services/checkout.ts';
 import { addMember, listCustomerEntitlements, removeMember } from '../services/customers.ts';
 import { consumeLoginLink, logout, requestLogin } from '../services/human-auth.ts';
+import { getInvoice, invoiceNumber, listInvoices, renderInvoicePdf } from '../services/invoices.ts';
 import * as licensing from '../services/licensing.ts';
 import { Badge, Csrf, fmt, Layout, money } from '../views/layout.tsx';
-import { type AppEnv, type Ctx, kickEmailDispatch, logError, toAppError } from './context.ts';
+import { type AppEnv, type Ctx, kickEmailDispatch, logError, pdfResponse, toAppError } from './context.ts';
 import { clearSessionCookie, csrfGuard, formData, loadSession, setSessionCookie } from './session.ts';
 
 type Role = 'owner' | 'admin' | 'billing' | 'member';
@@ -137,6 +138,10 @@ portalUi.get('/', async (c) => {
         <h2>{m.organisation_name ?? m.display_name} <span class="muted">({m.role})</span></h2>
         {m.stripe_customer_id && BILLING.includes(m.role) ? <form class="inline" method="post" action={`/portal/customers/${m.customer_id}/billing`}><Csrf token={c.get('csrf')} /><button class="secondary" type="submit">Manage billing, payment methods and invoices (Stripe)</button></form> : null}
         {BILLING.includes(m.role) && c.get('deps').config.stripePortalLoginUrl ? <p class="muted">Or sign in to <a href={c.get('deps').config.stripePortalLoginUrl!} rel="noopener">Stripe's billing portal</a> directly with this email address.</p> : null}
+        {BILLING.includes(m.role) ? await (async () => {
+          const invs = await listInvoices(sql, m.customer_id);
+          return invs.length ? <details><summary>Invoices ({invs.length})</summary><ul>{invs.map((i) => <li><a href={`/portal/invoices/${i.id}.pdf`}>{invoiceNumber(c.get('deps').config, i.number, i.livemode)}</a> · {money(i.total, i.currency)} · {fmt(i.issued_at)} · paid</li>)}</ul></details> : null;
+        })() : null}
         {ents.length === 0 ? <p class="muted">No licences yet.</p> : null}
         {ents.map((e) => (
           <div class="card">
@@ -209,6 +214,18 @@ portalUi.post('/activations/:id/release', guarded(async (c) => {
   return back(c, 'Device released. An offline device learns about this the next time it renews.');
 }));
 
+portalUi.get('/invoices/:file', async (c) => {
+  const id = c.req.param('file').replace(/\.pdf$/, '');
+  const { sql, config } = c.get('deps');
+  try {
+    const inv = await getInvoice(sql, id);
+    await customerAccess(c, inv.customer_id, BILLING);
+    return pdfResponse(renderInvoicePdf(config, inv), `${invoiceNumber(config, inv.number, inv.livemode)}.pdf`);
+  } catch {
+    return back(c, 'Invoice not found', 'err');
+  }
+});
+
 portalUi.post('/customers/:id/billing', guarded(async (c) => {
   await customerAccess(c, c.req.param('id')!, BILLING);
   const url = await createBillingPortalSession(c.get('deps').sql, c.get('deps').config, c.get('deps').stripe, c.req.param('id')!);
@@ -266,7 +283,7 @@ storeUi.get('/store', async (c) => {
   // Signed in to the portal: buy as that account (email fixed).
   const session = await loadSession(c, 'customer');
   const me = session ? (await sql<{ email: string }[]>`SELECT email FROM portal_users WHERE id = ${session.subjectId} AND status = 'active'`)[0]?.email ?? null : null;
-  return c.html(<Layout title="Store" realm="public" script="/assets/store.js">
+  return c.html(<Layout title="Store" realm="public">
     <h1>Store</h1>
     {items.length === 0 ? <p class="muted">Nothing is on sale right now.</p> : (
       <form method="get" action="/store" class="currency-picker">

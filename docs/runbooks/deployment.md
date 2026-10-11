@@ -101,7 +101,7 @@ In **Signing keys**: generate `repass-ed25519-<year>` and `repass-mldsa65-<year>
 
 ## 5. Stripe
 
-1. Start in **test mode**. Use restricted keys if you prefer. The server needs write access to Products, Prices and Checkout Sessions, and read access to Customers, Subscriptions, Invoices, Charges, Disputes, Invoice Payments, Events and the Billing Portal.
+1. Start in **test mode**. Use restricted keys if you prefer. The server needs write access to Products, Customers, Tax Rates, Checkout Sessions and Billing Portal sessions, and read access to Subscriptions, Invoices, Charges, Disputes, Invoice Payments and Events. It never creates Stripe Prices: amounts are sent inline (`price_data`) from the database.
 2. Developers → Webhooks → add endpoint `https://license-server.repasscloud.com/webhooks/stripe`, API version **`2026-09-30.endive`** (must match `STRIPE_API_VERSION`), with these events:
    `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`,
    `invoice.paid`, `invoice.payment_failed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`,

@@ -11,7 +11,7 @@ import { processStripeEvent, reconcileCheckouts, reconcileSubscriptions, RetryLa
 import { dispatchEmails, enqueueEmail } from '../services/email.ts';
 import { claimJobs, completeJob, failJob, type Job } from '../services/jobs.ts';
 import { purgeRateLimitBuckets } from '../services/rate-limit.ts';
-import { archiveStripePrice, checkDrift, syncOffer, syncPrice } from '../services/stripe-sync.ts';
+import { syncOffer } from '../services/stripe-sync.ts';
 
 export interface JobDeps {
   sql: Sql;
@@ -26,14 +26,8 @@ export async function runJob(d: JobDeps, job: Job): Promise<void> {
     case 'stripe.process_event':
       await processStripeEvent(d.sql, d.config, d.stripe, String(job.payload.eventId));
       return;
-    case 'stripe.sync_price':
-      await syncPrice(d.sql, d.stripe, String(job.payload.priceVersionId));
-      return;
     case 'stripe.sync_offer':
       await syncOffer(d.sql, d.stripe, String(job.payload.offerId));
-      return;
-    case 'stripe.archive_price':
-      await archiveStripePrice(d.sql, d.stripe, String(job.payload.priceVersionId));
       return;
     default:
       throw new Error(`unknown job kind ${job.kind}`);
@@ -70,12 +64,11 @@ export async function frequentTick(d: JobDeps): Promise<Record<string, unknown>>
   return { jobs, mail, checkouts: checkouts.length };
 }
 
-/** Daily tick: reconciliation, drift checks and retention housekeeping. */
+/** Daily tick: reconciliation and retention housekeeping. */
 export async function dailyTick(d: JobDeps): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
   if (d.config.has('STRIPE_SECRET_KEY')) {
     out.subscriptions = (await reconcileSubscriptions(d.sql, d.config, d.stripe, 3)).length;
-    out.drift = await checkDrift(d.sql, d.stripe, 5);
   }
   out.expiringReminders = await queueExpiringReminders(d);
   out.rateBuckets = await purgeRateLimitBuckets(d.sql);

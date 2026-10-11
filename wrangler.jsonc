@@ -76,6 +76,10 @@
 				"SIGNING_KEK_ACTIVE_VERSION": "1",
 				"APP_DATA_KEY_ACTIVE_VERSION": "1",
 				"MAIL_TRANSPORT": "mailersend",
+				// Seller details on the paid invoices the server issues.
+				"INVOICE_SELLER_NAME": "RePass Cloud Pty Ltd",
+				"INVOICE_SELLER_ABN": "74642243801",
+				"INVOICE_NUMBER_PREFIX": "RPL",
 				// Optional fallback link shown in the portal. Test-mode link until you switch Stripe to live.
 				"STRIPE_CUSTOMER_PORTAL_LOGIN_URL": "https://billing.stripe.com/p/login/test_7sYfZjarp60x3ui17p14400"
 			}
@@ -112,6 +116,10 @@
 				"SIGNING_KEK_ACTIVE_VERSION": "1",
 				"APP_DATA_KEY_ACTIVE_VERSION": "1",
 				"MAIL_TRANSPORT": "mailersend",
+				// Seller details on the paid invoices the server issues.
+				"INVOICE_SELLER_NAME": "RePass Cloud Pty Ltd",
+				"INVOICE_SELLER_ABN": "74642243801",
+				"INVOICE_NUMBER_PREFIX": "RPL",
 				// Optional fallback link shown in the portal. Test-mode link until you switch Stripe to live.
 				"STRIPE_CUSTOMER_PORTAL_LOGIN_URL": "https://billing.stripe.com/p/login/test_7sYfZjarp60x3ui17p14400"
 			}
