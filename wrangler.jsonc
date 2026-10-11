@@ -38,7 +38,7 @@
 		"MAIL_FROM_EMAIL": "licensing@example.invalid",
 		"MAIL_FROM_NAME": "RePassCloud Licensing (dev)",
 		"SUPPORT_EMAIL": "support@example.invalid",
-		"STRIPE_API_VERSION": "2026-08-26.dahlia",
+		"STRIPE_API_VERSION": "2026-09-30.endive",
 		"SIGNING_KEK_ACTIVE_VERSION": "1",
 		"APP_DATA_KEY_ACTIVE_VERSION": "1",
 		"MAIL_TRANSPORT": "capture"
@@ -72,7 +72,7 @@
 				"MAIL_FROM_EMAIL": "hello@repasscloud.com",
 				"MAIL_FROM_NAME": "RePassCloud Licensing (staging)",
 				"SUPPORT_EMAIL": "hello@repasscloud.com",
-				"STRIPE_API_VERSION": "2026-08-26.dahlia",
+				"STRIPE_API_VERSION": "2026-09-30.endive",
 				"SIGNING_KEK_ACTIVE_VERSION": "1",
 				"APP_DATA_KEY_ACTIVE_VERSION": "1",
 				"MAIL_TRANSPORT": "mailersend"
@@ -106,7 +106,7 @@
 				"MAIL_FROM_EMAIL": "hello@repasscloud.com",
 				"MAIL_FROM_NAME": "RePassCloud Licensing",
 				"SUPPORT_EMAIL": "hello@repasscloud.com",
-				"STRIPE_API_VERSION": "2026-08-26.dahlia",
+				"STRIPE_API_VERSION": "2026-09-30.endive",
 				"SIGNING_KEK_ACTIVE_VERSION": "1",
 				"APP_DATA_KEY_ACTIVE_VERSION": "1",
 				"MAIL_TRANSPORT": "mailersend"
