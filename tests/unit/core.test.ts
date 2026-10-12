@@ -5,6 +5,7 @@ import { computeEffectivePolicy, validateOfferShape, validatePolicy, validatePri
 import { MailerSendTransport, MailError } from '../../src/integrations/mail.ts';
 import { formEncode, signStripePayload, StripeClient, StripeError, verifyStripeSignature, WebhookSignatureError } from '../../src/integrations/stripe.ts';
 import { base64UrlDecode, base64UrlEncode, encodeUtf8 } from '../../src/lib/encoding.ts';
+import { parseCsv } from '../../src/lib/csv.ts';
 import { compareSemver } from '../../src/lib/semver.ts';
 import { addInterval, rfc3339 } from '../../src/lib/time.ts';
 import { renderTemplate } from '../../src/services/email.ts';
@@ -203,5 +204,22 @@ describe('policy engine (data-driven, protocol-validated)', () => {
     expect(validatePrice({ billing: 'one_time', unitAmount: 0, recurringInterval: null }).map((x) => x.rule)).toEqual(['price.zero']);
     expect(validatePrice({ billing: 'one_time', unitAmount: 1.5, recurringInterval: null }).map((x) => x.rule)).toEqual(['price.amount']);
     expect(validatePrice({ billing: 'recurring', unitAmount: 100, recurringInterval: null }).map((x) => x.rule)).toEqual(['price.interval']);
+  });
+});
+
+describe('CSV reader (catalogue import)', () => {
+  it('handles a BOM, quotes, doubled quotes, embedded commas/newlines and CRLF', () => {
+    const t = parseCsv('﻿sku,name,description\r\nab-1,"AI — PDF","Say ""hi"", then\nread"\r\n\r\ncd-2,Plain,\n');
+    expect(t.headers).toEqual(['sku', 'name', 'description']);
+    expect(t.rows).toEqual([
+      { line: 2, values: { sku: 'ab-1', name: 'AI — PDF', description: 'Say "hi", then\nread' } },
+      { line: 5, values: { sku: 'cd-2', name: 'Plain', description: '' } },
+    ]);
+  });
+
+  it('rejects duplicate columns, extra fields and unterminated quotes', () => {
+    expect(() => parseCsv('a,a\n1,2\n')).toThrow(/Duplicate CSV column/);
+    expect(() => parseCsv('a,b\n1,2,3\n')).toThrow(/Line 2 has 3 fields/);
+    expect(() => parseCsv('a\n"open\n')).toThrow(/Unterminated/);
   });
 });
