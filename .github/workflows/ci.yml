@@ -79,7 +79,10 @@ jobs:
       - name: Workers runtime test (workerd + Hyperdrive local binding)
         run: npx vitest run --project workers
 
-      - name: Package Worker (wrangler dry-run)
+      - name: Package Worker (wrangler dry-run staging)
+        run: npm run build:dev
+
+      - name: Package Worker (wrangler dry-run production)
         run: npm run build
 
       - name: OpenAPI document is up to date
