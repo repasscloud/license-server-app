@@ -13,6 +13,11 @@ import { requirePermission, type Actor } from './actor.ts';
 import { audit } from './audit.ts';
 
 const slug = z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,63}$/, 'lower-case letters, digits, _ . - (max 64)');
+export const ImageUrl = z.string().trim().max(2048).refine((v) => {
+  if (v.startsWith('/') && !v.startsWith('//') && !v.includes('\\') && !/[\s<>]/.test(v)) return true;
+  try { const u = new URL(v); return ['https:', 'http:'].includes(u.protocol) && !u.username && !u.password; } catch { return false; }
+}, 'Use an HTTP(S) URL or a site-relative path beginning with /');
+
 const text = (max: number) => z.string().trim().max(max);
 
 function problemsError(problems: PolicyProblem[]): AppError {
@@ -44,6 +49,7 @@ export const CreateProductInput = z.object({
   vendor: text(200).default('RePassCloud'),
   visibility: z.enum(['public', 'private']).default('public'),
   supportUrl: z.url().nullable().optional(),
+  imageUrl: ImageUrl.nullable().optional(),
 }).strict();
 
 export const UpdateProductInput = z.object({
@@ -52,6 +58,7 @@ export const UpdateProductInput = z.object({
   status: z.enum(['draft', 'active', 'retired']).optional(),
   visibility: z.enum(['public', 'private']).optional(),
   supportUrl: z.url().nullable().optional(),
+  imageUrl: ImageUrl.nullable().optional(),
 }).strict();
 
 export async function createProduct(sql: Sql, actor: Actor, raw: unknown) {
@@ -62,8 +69,8 @@ export async function createProduct(sql: Sql, actor: Actor, raw: unknown) {
     if (exists.length) throw conflict(`Product id ${input.slug} already exists (product ids are immutable and never reused)`);
     await assertProductNameFree(tx, input.name, null);
     const id = newId('prd');
-    await tx`INSERT INTO products (id, slug, name, description, vendor, visibility, support_url)
-             VALUES (${id}, ${input.slug}, ${input.name}, ${input.description}, ${input.vendor}, ${input.visibility}, ${input.supportUrl ?? null})`;
+    await tx`INSERT INTO products (id, slug, name, description, vendor, visibility, support_url, image_url)
+             VALUES (${id}, ${input.slug}, ${input.name}, ${input.description}, ${input.vendor}, ${input.visibility}, ${input.supportUrl ?? null}, ${input.imageUrl ?? null})`;
     await audit(tx, actor, { action: 'product.created', resourceType: 'product', resourceId: id, detail: { slug: input.slug } });
     return getProduct(tx, id);
   });
@@ -83,6 +90,7 @@ export async function updateProduct(sql: Sql, actor: Actor, idOrSlug: string, ra
       description = coalesce(${input.description ?? null}, description),
       status = coalesce(${input.status ?? null}, status),
       visibility = coalesce(${input.visibility ?? null}, visibility),
+      image_url = CASE WHEN ${input.imageUrl !== undefined} THEN ${input.imageUrl ?? null} ELSE image_url END,
       support_url = CASE WHEN ${input.supportUrl !== undefined} THEN ${input.supportUrl ?? null} ELSE support_url END
       WHERE id = ${id}`;
     await audit(tx, actor, { action: 'product.updated', resourceType: 'product', resourceId: id, detail: { changes: input } });
@@ -102,7 +110,7 @@ export async function listProducts(db: Db, opts: { status?: string; search?: str
 }
 
 export async function getProduct(db: Db, idOrSlug: string) {
-  const [p] = await db<{ id: string; slug: string; name: string; description: string; vendor: string; status: string; visibility: string; support_url: string | null; created_at: Date }[]>`
+  const [p] = await db<{ id: string; slug: string; name: string; description: string; vendor: string; status: string; visibility: string; support_url: string | null; image_url: string | null; created_at: Date }[]>`
     SELECT * FROM products WHERE id = ${idOrSlug} OR slug = ${idOrSlug}`;
   if (!p) throw notFound('Product');
   const majors = await db<{ id: string; major_version: number; protocol_id: string; status: string; default_transfer_allowance: number; activation_key_email: boolean }[]>`
@@ -341,10 +349,12 @@ export const CreateOfferInput = z.object({
   billingAddressCollection: z.enum(['auto', 'required']).default('auto'),
   taxIdCollection: z.boolean().default(false),
   customerKind: z.enum(['any', 'individual', 'organisation']).default('any'),
+  organisationDetails: z.enum(['auto', 'required', 'none']).default('auto'),
   components: z.array(ComponentInput).min(1).max(20),
 }).strict();
 
 export const UpdateOfferInput = z.object({
+  organisationDetails: z.enum(['auto', 'required', 'none']).optional(),
   name: text(200).min(1).optional(),
   description: text(4000).optional(),
   visibility: z.enum(['public', 'private']).optional(),
@@ -376,10 +386,10 @@ export async function createOffer(sql: Sql, actor: Actor, raw: unknown) {
     await assertOfferNameFree(tx, input.name, null);
     const id = newId('off');
     await tx`INSERT INTO offers (id, sku, name, description, kind, billing, visibility, available_from, available_until, min_quantity, max_quantity,
-                                 allow_promotion_codes, automatic_tax, billing_address_collection, tax_id_collection, customer_kind)
+                                 allow_promotion_codes, automatic_tax, billing_address_collection, tax_id_collection, customer_kind, organisation_details)
              VALUES (${id}, ${input.sku}, ${input.name}, ${input.description}, ${input.kind}, ${input.billing}, ${input.visibility},
                      ${input.availableFrom}, ${input.availableUntil}, ${input.minQuantity}, ${input.maxQuantity},
-                     ${input.allowPromotionCodes}, ${input.automaticTax}, ${input.billingAddressCollection}, ${input.taxIdCollection}, ${input.customerKind})`;
+                     ${input.allowPromotionCodes}, ${input.automaticTax}, ${input.billingAddressCollection}, ${input.taxIdCollection}, ${input.customerKind}, ${input.organisationDetails})`;
     let pos = 0;
     for (const c of input.components) {
       const ep = await tx`SELECT 1 FROM product_edition_policies WHERE id = ${c.editionPolicyId} AND status = 'active'`;
@@ -389,6 +399,7 @@ export async function createOffer(sql: Sql, actor: Actor, raw: unknown) {
                VALUES (${newId('ocp')}, ${id}, ${c.editionPolicyId}, ${pos++}, ${c.termType}, ${c.termInterval}, ${c.termIntervalCount}, ${c.seatsPerUnit},
                        ${c.quantityScalesSeats}, ${c.trialDays}, ${c.graceDays}, ${c.transferAllowance}, ${c.refundAction}, ${c.disputeAction})`;
     }
+    await validateOrganisationDetails(tx, id, input.organisationDetails);
     const problems = await validateOfferComponents(tx, id, input);
     if (problems.length) throw problemsError(problems);
     await tx`INSERT INTO stripe_product_mappings (offer_id) VALUES (${id})`;
@@ -403,6 +414,7 @@ export async function updateOffer(sql: Sql, actor: Actor, id: string, raw: unkno
   return sql.begin(async (tx) => {
     const [o] = await tx<{ status: string }[]>`SELECT status FROM offers WHERE id = ${id} FOR UPDATE`;
     if (!o) throw notFound('Offer');
+    if (input.organisationDetails) await validateOrganisationDetails(tx, id, input.organisationDetails);
     if (input.name && o.status !== 'archived') await assertOfferNameFree(tx, input.name, id);
     await tx`UPDATE offers SET
       name = coalesce(${input.name ?? null}, name),
@@ -413,6 +425,7 @@ export async function updateOffer(sql: Sql, actor: Actor, id: string, raw: unkno
       allow_promotion_codes = coalesce(${input.allowPromotionCodes ?? null}, allow_promotion_codes),
       automatic_tax = coalesce(${input.automaticTax ?? null}, automatic_tax),
       billing_address_collection = coalesce(${input.billingAddressCollection ?? null}, billing_address_collection),
+      organisation_details = coalesce(${input.organisationDetails ?? null}, organisation_details),
       tax_id_collection = coalesce(${input.taxIdCollection ?? null}, tax_id_collection)
       WHERE id = ${id}`;
     // The linked Stripe product is managed in Stripe: renaming the offer never renames it.
@@ -633,7 +646,7 @@ export async function listPriceHistory(db: Db, offerId: string) {
 // ---------------------------------------------------------------------------------------------
 
 export interface PurchasableOffer {
-  offer: { id: string; sku: string; name: string; description: string; kind: 'single' | 'bundle'; billing: 'one_time' | 'recurring' | 'free'; min_quantity: number; max_quantity: number; allow_promotion_codes: boolean; automatic_tax: boolean; billing_address_collection: 'auto' | 'required'; tax_id_collection: boolean; customer_kind: string; visibility: string };
+  offer: { id: string; sku: string; name: string; description: string; kind: 'single' | 'bundle'; billing: 'one_time' | 'recurring' | 'free'; min_quantity: number; max_quantity: number; allow_promotion_codes: boolean; automatic_tax: boolean; billing_address_collection: 'auto' | 'required'; tax_id_collection: boolean; customer_kind: string; organisation_details: 'auto' | 'required' | 'none'; visibility: string };
   price: { id: string; currency: string; unit_amount: number; recurring_interval: string | null; recurring_interval_count: number | null; tax_behavior: string; tax_rate_bps: number | null; tax_label: string | null };
   components: Array<{ componentId: string; policy: EffectivePolicy }>;
 }
@@ -663,36 +676,65 @@ export async function resolvePurchasable(db: Db, sku: string, currency: string, 
   return { offer, price, components };
 }
 
+export function needsOrganisation(offer: { customer_kind: string; organisation_details: string }, ownerships: string[]): boolean {
+  return offer.organisation_details === 'required' || offer.customer_kind === 'organisation' || ownerships.some(o => o !== 'individual');
+}
+
+async function validateOrganisationDetails(db: Db, offerId: string, setting: string) {
+  if (setting === 'required') {
+    const rows = await db`SELECT 1 FROM offers WHERE id = ${offerId} AND customer_kind = 'individual'`;
+    if (rows.length) throw invalid('Individual-only offers cannot require organisation details');
+  }
+  if (setting !== 'none') return;
+  const rows = await db`SELECT 1 FROM offers o WHERE o.id = ${offerId} AND (o.customer_kind = 'organisation' OR EXISTS (
+    SELECT 1 FROM offer_entitlement_components c JOIN product_edition_policies ep ON ep.id = c.edition_policy_id
+    WHERE c.offer_id = o.id AND ep.ownership <> 'individual'))`;
+  if (rows.length) throw invalid('Organisation-owned editions require business name and country');
+}
+
+export interface StoreComponent {
+  slug: string; name: string; description: string; imageUrl: string | null; major: number; edition: string;
+}
 export interface StoreOffer {
   sku: string; name: string; description: string; billing: string; kind: string; products: string;
-  /** Business / Enterprise / Education (or organisation-only): the store asks for business details. */
+  minQuantity: number; maxQuantity: number; components: StoreComponent[];
   needsOrganisation: boolean;
   prices: Array<{ currency: string; unitAmount: number; recurringInterval: string | null; recurringIntervalCount: number | null; taxRateBps: number | null; taxLabel: string | null }>;
 }
 
-/** Public offers priced in every store currency (an offer missing any currency is not shown). */
+/** Public catalogue contains only offers whose entire component set can be sold publicly. */
 export async function listPublicCatalogue(db: Db, now: Date): Promise<StoreOffer[]> {
-  const rows = await db<{ sku: string; name: string; description: string; billing: string; kind: string; currency: string; unit_amount: number; recurring_interval: string | null;
-    recurring_interval_count: number | null; tax_rate_bps: number | null; tax_label: string | null; products: string; needs_org: boolean }[]>`
-    SELECT o.sku, o.name, o.description, o.billing, o.kind, pv.currency, pv.unit_amount, pv.recurring_interval, pv.recurring_interval_count, pv.tax_rate_bps, pv.tax_label,
-      (SELECT string_agg(p.name || ' ' || m.major_version || ' ' || ep.display_name, ' + ' ORDER BY c.position)
-         FROM offer_entitlement_components c JOIN product_edition_policies ep ON ep.id = c.edition_policy_id
-         JOIN product_majors m ON m.id = ep.product_major_id JOIN products p ON p.id = m.product_id WHERE c.offer_id = o.id) AS products,
-      (o.customer_kind = 'organisation' OR EXISTS (SELECT 1 FROM offer_entitlement_components c JOIN product_edition_policies ep ON ep.id = c.edition_policy_id
-         WHERE c.offer_id = o.id AND ep.edition_id IN ('business', 'enterprise', 'education'))) AS needs_org
+  const rows = await db<{ id: string; sku: string; name: string; description: string; billing: string; kind: string; min_quantity: number; max_quantity: number;
+    organisation_details: string; customer_kind: string; currency: string; unit_amount: number; recurring_interval: string | null;
+    recurring_interval_count: number | null; tax_rate_bps: number | null; tax_label: string | null }[]>`
+    SELECT o.*, pv.currency, pv.unit_amount, pv.recurring_interval, pv.recurring_interval_count, pv.tax_rate_bps, pv.tax_label
     FROM offers o JOIN price_versions pv ON pv.offer_id = o.id AND pv.status = 'active'
       AND (pv.effective_from IS NULL OR pv.effective_from <= ${now}) AND (pv.effective_until IS NULL OR pv.effective_until > ${now})
     WHERE o.status = 'active' AND o.visibility = 'public'
       AND (o.available_from IS NULL OR o.available_from <= ${now}) AND (o.available_until IS NULL OR o.available_until > ${now})
-    ORDER BY o.name, pv.currency`;
+      AND EXISTS (SELECT 1 FROM offer_entitlement_components WHERE offer_id = o.id)
+      AND NOT EXISTS (SELECT 1 FROM offer_entitlement_components c JOIN product_edition_policies ep ON ep.id = c.edition_policy_id
+        JOIN product_majors m ON m.id = ep.product_major_id JOIN products p ON p.id = m.product_id
+        WHERE c.offer_id = o.id AND (p.visibility <> 'public' OR p.status <> 'active' OR m.status <> 'active' OR ep.status <> 'active'))
+    ORDER BY o.name, pv.currency, pv.created_at DESC`;
   const bySku = new Map<string, StoreOffer>();
+  // Fetch all public components in one query instead of per-offer database round trips.
+  const components = rows.length ? await db<{ offer_id: string; slug: string; name: string; description: string; image_url: string | null; major_version: number; display_name: string; ownership: string }[]>`
+    SELECT c.offer_id, p.slug, p.name, p.description, p.image_url, m.major_version, ep.display_name, ep.ownership
+    FROM offer_entitlement_components c JOIN product_edition_policies ep ON ep.id = c.edition_policy_id
+    JOIN product_majors m ON m.id = ep.product_major_id JOIN products p ON p.id = m.product_id
+    WHERE c.offer_id IN (SELECT jsonb_array_elements_text(${db.json([...new Set(rows.map(r => r.id))] as never)}::jsonb)) ORDER BY c.position` : [];
   for (const r of rows) {
     let o = bySku.get(r.sku);
     if (!o) {
-      o = { sku: r.sku, name: r.name, description: r.description, billing: r.billing, kind: r.kind, products: r.products, needsOrganisation: r.needs_org, prices: [] };
+      const cs = components.filter(c => c.offer_id === r.id);
+      o = { sku: r.sku, name: r.name, description: r.description, billing: r.billing, kind: r.kind,
+        products: cs.map(c => `${c.name} ${c.major_version} ${c.display_name}`).join(' + '),
+        components: cs.map(c => ({ slug: c.slug, name: c.name, description: c.description, imageUrl: c.image_url, major: c.major_version, edition: c.display_name })),
+        minQuantity: r.min_quantity, maxQuantity: r.max_quantity, needsOrganisation: needsOrganisation(r, cs.map(c => c.ownership)), prices: [] };
       bySku.set(r.sku, o);
     }
-    o.prices.push({ currency: r.currency, unitAmount: r.unit_amount, recurringInterval: r.recurring_interval, recurringIntervalCount: r.recurring_interval_count, taxRateBps: r.tax_rate_bps, taxLabel: r.tax_label });
+    if (!o.prices.some(p => p.currency === r.currency)) o.prices.push({ currency: r.currency, unitAmount: r.unit_amount, recurringInterval: r.recurring_interval, recurringIntervalCount: r.recurring_interval_count, taxRateBps: r.tax_rate_bps, taxLabel: r.tax_label });
   }
-  return [...bySku.values()].filter((o) => STORE_CURRENCIES.every((c) => o.prices.some((p) => p.currency === c)));
+  return [...bySku.values()].filter(o => STORE_CURRENCIES.every(c => o.prices.some(p => p.currency === c)));
 }

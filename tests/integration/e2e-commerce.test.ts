@@ -488,10 +488,10 @@ describe('pricing changes, drift and provider outages', () => {
   it('an offer missing a price in any currency is hidden and cannot be bought', async () => {
     const [usd] = await sql<{ id: string }[]>`SELECT id FROM price_versions WHERE offer_id = ${ids['offer_cd2-community-reg']!} AND currency = 'usd' AND status = 'active'`;
     await ok('POST', `/prices/${usd!.id}/archive`);
-    expect(await (await new Client(env).request('/store')).text()).not.toMatch(/Community registration/);
+    expect(await (await new Client(env).request('/store/products/cursedelete')).text()).not.toMatch(/Community registration/);
     expect((await checkout('cd2-community-reg', 'x@y.example')).res.status).toBe(412);
     await ok('POST', `/offers/${ids['offer_cd2-community-reg']}/prices`, { prices: [{ currency: 'usd', unitAmount: 0 }] });
-    expect(await (await new Client(env).request('/store')).text()).toMatch(/Community registration/);
+    expect(await (await new Client(env).request('/store/products/cursedelete')).text()).toMatch(/Community registration/);
     expect((await checkout('cd2-community-reg', 'x@y.example')).res.status).toBe(303);
   });
 
@@ -724,7 +724,7 @@ describe('store: one customer per email, flat tax, prices registered from Stripe
   });
 
   it('shows every currency from the database, with tax added on top', async () => {
-    const html = await (await new Client(env).request('/store?currency=usd')).text();
+    const html = await (await new Client(env).request('/store/products/cursedelete?currency=usd&sku=cd2-education')).text();
     expect(html).toMatch(/<option value="usd" selected/);
     expect(html).toMatch(/data-price="usd"><b>70\.00 USD<\/b>/);
     expect(html).toMatch(/data-price="aud" hidden=""><b>110\.00 AUD<\/b> incl\. GST/);

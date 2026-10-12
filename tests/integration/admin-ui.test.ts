@@ -99,8 +99,10 @@ describe('admin pages are functional', () => {
 
   it('creates a product via the UI form (same service as the API) and audits it', async () => {
     const csrf = await ui.csrfFrom('/admin/products');
-    const r = await ui.request('/admin/products', { method: 'POST', form: { _csrf: csrf, slug: 'uiapp', name: 'UI App', description: '', visibility: 'public' } });
+    const r = await ui.request('/admin/products', { method: 'POST', form: { _csrf: csrf, slug: 'uiapp', name: 'UI App', description: '', imageUrl: '/assets/uiapp.svg', visibility: 'public' } });
     expect(r.status).toBe(303);
+    const [product] = await sql<{ image_url: string }[]>`SELECT image_url FROM products WHERE slug = 'uiapp'`;
+    expect(product?.image_url).toBe('/assets/uiapp.svg');
     const [a] = await sql<{ actor_type: string; actor_id: string }[]>`SELECT actor_type, actor_id FROM audit_events WHERE action = 'product.created'`;
     expect(a).toEqual({ actor_type: 'admin', actor_id: 'adm_root' });
   });

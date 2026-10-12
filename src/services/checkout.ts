@@ -5,6 +5,7 @@
 // fulfilment happens only from verified Stripe state (billing.ts).
 
 import { z } from 'zod';
+import { isCountryCode } from '../lib/countries.ts';
 import type { Config } from '../config.ts';
 import type { Db, Sql } from '../db/client.ts';
 import { computeEffectivePolicy, validatePolicy } from '../domain/policy.ts';
@@ -13,7 +14,7 @@ import { AppError, conflict, invalid, notFound } from '../lib/errors.ts';
 import { newId } from '../lib/ids.ts';
 import type { Actor } from './actor.ts';
 import { audit } from './audit.ts';
-import { loadPolicyRows, resolvePurchasable } from './catalogue.ts';
+import { loadPolicyRows, needsOrganisation as requiresOrganisation, resolvePurchasable } from './catalogue.ts';
 import { normaliseEmail, resolveStoreCustomer } from './customers.ts';
 import { ensureStripeCustomer, ensureStripeProduct, ensureStripeTaxRate } from './stripe-sync.ts';
 
@@ -26,14 +27,11 @@ export const CreateCheckoutInput = z.object({
   idempotencyKey: z.string().regex(/^[A-Za-z0-9_-]{16,100}$/),
   /** Purchaser's name (the customer's display name on first purchase). */
   name: z.string().trim().min(1).max(200).optional(),
-  /** Required for Business / Enterprise / Education; identifier (ABN, VAT, EIN…) optional. */
+  /** Required by organisation ownership or offer configuration; business identifier is optional. */
   businessName: z.string().trim().max(200).optional().transform((v) => v || undefined),
-  country: z.string().trim().optional().transform((v) => (v ? v.toUpperCase() : undefined)).refine((v) => v === undefined || /^[A-Z]{2}$/.test(v), 'Country must be a two-letter code'),
+  country: z.string().trim().optional().transform((v) => (v ? v.toUpperCase() : undefined)).refine((v) => v === undefined || isCountryCode(v), 'Choose a valid country'),
   businessIdentifier: z.string().trim().max(64).optional().transform((v) => v || undefined),
 }).strict();
-
-/** Editions sold to organisations: the store requires business name and country for these. */
-const ORGANISATION_EDITIONS = new Set(['business', 'enterprise', 'education']);
 
 export interface CheckoutSnapshot {
   version: 1;
@@ -77,9 +75,9 @@ export async function createCheckout(sql: Sql, config: Config, stripe: StripeCli
   const purchasable = await resolvePurchasable(sql, input.sku, input.currency, now);
   const { offer, price } = purchasable;
   if (input.quantity < offer.min_quantity || input.quantity > offer.max_quantity) throw invalid(`Quantity must be between ${offer.min_quantity} and ${offer.max_quantity}`);
-  const needsOrganisation = offer.customer_kind === 'organisation' || purchasable.components.some((c) => ORGANISATION_EDITIONS.has(c.policy.edition.editionId));
+  const needsOrganisation = requiresOrganisation(offer, purchasable.components.map(c => c.policy.ownership));
   if (needsOrganisation && (!input.businessName || !input.country)) {
-    throw invalid('Business name and country are required for Business, Enterprise and Education licences');
+    throw invalid('Business name and country are required for this licence');
   }
   if (offer.customer_kind === 'individual' && input.businessName) throw invalid('This offer is only available to individual customers');
   // One customer per email, created (or found) before Stripe is called, so Checkout opens on
