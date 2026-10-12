@@ -19,6 +19,20 @@ function problemsError(problems: PolicyProblem[]): AppError {
   return new AppError('protocol_incompatible', problems.map((p) => p.message).join('; '), { problems });
 }
 
+// Names are unique case-insensitively among products that are not retired and offers that are
+// not archived (migration 0007 enforces it; these give the readable error first).
+async function assertProductNameFree(db: Db, name: string, exceptId: string | null): Promise<void> {
+  const [p] = await db<{ slug: string }[]>`
+    SELECT slug FROM products WHERE lower(name) = lower(${name}) AND status <> 'retired' AND (${exceptId}::text IS NULL OR id <> ${exceptId})`;
+  if (p) throw conflict(`Product name "${name}" is already used by product ${p.slug}`);
+}
+
+async function assertOfferNameFree(db: Db, name: string, exceptId: string | null): Promise<void> {
+  const [o] = await db<{ sku: string }[]>`
+    SELECT sku FROM offers WHERE lower(name) = lower(${name}) AND status <> 'archived' AND (${exceptId}::text IS NULL OR id <> ${exceptId})`;
+  if (o) throw conflict(`Offer name "${name}" is already used by offer ${o.sku}`);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Products
 // ---------------------------------------------------------------------------------------------
@@ -46,6 +60,7 @@ export async function createProduct(sql: Sql, actor: Actor, raw: unknown) {
   return sql.begin(async (tx) => {
     const exists = await tx`SELECT 1 FROM products WHERE slug = ${input.slug}`;
     if (exists.length) throw conflict(`Product id ${input.slug} already exists (product ids are immutable and never reused)`);
+    await assertProductNameFree(tx, input.name, null);
     const id = newId('prd');
     await tx`INSERT INTO products (id, slug, name, description, vendor, visibility, support_url)
              VALUES (${id}, ${input.slug}, ${input.name}, ${input.description}, ${input.vendor}, ${input.visibility}, ${input.supportUrl ?? null})`;
@@ -59,9 +74,10 @@ export async function updateProduct(sql: Sql, actor: Actor, idOrSlug: string, ra
   const input = UpdateProductInput.parse(raw);
   return sql.begin(async (tx) => {
     // Accept the internal id or the immutable slug (wire productId), like getProduct.
-    const [p] = await tx<{ id: string; status: string }[]>`SELECT id, status FROM products WHERE id = ${idOrSlug} OR slug = ${idOrSlug} FOR UPDATE`;
+    const [p] = await tx<{ id: string; name: string; status: string }[]>`SELECT id, name, status FROM products WHERE id = ${idOrSlug} OR slug = ${idOrSlug} FOR UPDATE`;
     if (!p) throw notFound('Product');
     const id = p.id;
+    if ((input.status ?? p.status) !== 'retired') await assertProductNameFree(tx, input.name ?? p.name, id);
     await tx`UPDATE products SET
       name = coalesce(${input.name ?? null}, name),
       description = coalesce(${input.description ?? null}, description),
@@ -357,6 +373,7 @@ export async function createOffer(sql: Sql, actor: Actor, raw: unknown) {
   return sql.begin(async (tx) => {
     const dup = await tx`SELECT 1 FROM offers WHERE sku = ${input.sku}`;
     if (dup.length) throw conflict(`SKU ${input.sku} already exists`);
+    await assertOfferNameFree(tx, input.name, null);
     const id = newId('off');
     await tx`INSERT INTO offers (id, sku, name, description, kind, billing, visibility, available_from, available_until, min_quantity, max_quantity,
                                  allow_promotion_codes, automatic_tax, billing_address_collection, tax_id_collection, customer_kind)
@@ -384,8 +401,9 @@ export async function updateOffer(sql: Sql, actor: Actor, id: string, raw: unkno
   requirePermission(actor, 'products:write');
   const input = UpdateOfferInput.parse(raw);
   return sql.begin(async (tx) => {
-    const [o] = await tx`SELECT 1 FROM offers WHERE id = ${id} FOR UPDATE`;
+    const [o] = await tx<{ status: string }[]>`SELECT status FROM offers WHERE id = ${id} FOR UPDATE`;
     if (!o) throw notFound('Offer');
+    if (input.name && o.status !== 'archived') await assertOfferNameFree(tx, input.name, id);
     await tx`UPDATE offers SET
       name = coalesce(${input.name ?? null}, name),
       description = coalesce(${input.description ?? null}, description),
@@ -405,15 +423,17 @@ export async function updateOffer(sql: Sql, actor: Actor, id: string, raw: unkno
 
 /**
  * Activate (publish) or archive an offer. Activation requires a valid protocol combination,
- * active product/majors, an active price in every store currency, and a linked, verified Stripe
- * product: an offer without one is never purchasable (the server never creates products).
+ * active product/majors and an active price in every store currency. A linked Stripe product must
+ * be verified; an offer with no Stripe product yet gets one created at its first checkout
+ * (stripe-sync.ts ensureStripeProduct).
  */
 export async function setOfferStatus(sql: Sql, actor: Actor, id: string, status: 'active' | 'archived' | 'draft') {
   requirePermission(actor, 'products:write');
   return sql.begin(async (tx) => {
-    const [o] = await tx<{ status: string; kind: 'single' | 'bundle'; billing: 'one_time' | 'recurring' | 'free'; max_quantity: number }[]>`
-      SELECT status, kind, billing, max_quantity FROM offers WHERE id = ${id} FOR UPDATE`;
+    const [o] = await tx<{ name: string; status: string; kind: 'single' | 'bundle'; billing: 'one_time' | 'recurring' | 'free'; max_quantity: number }[]>`
+      SELECT name, status, kind, billing, max_quantity FROM offers WHERE id = ${id} FOR UPDATE`;
     if (!o) throw notFound('Offer');
+    if (o.status === 'archived' && status !== 'archived') await assertOfferNameFree(tx, o.name, id);
     if (status === 'active') {
       const problems = await validateOfferComponents(tx, id, { kind: o.kind, billing: o.billing, maxQuantity: o.max_quantity });
       const inactive = await tx<{ slug: string; major_version: number; ps: string; ms: string }[]>`
@@ -425,8 +445,7 @@ export async function setOfferStatus(sql: Sql, actor: Actor, id: string, status:
       if (missing.length) problems.push({ rule: 'offer.price', message: `Offer needs an active price in every store currency; missing ${missing.join(', ').toUpperCase()}` });
       const [pm] = await tx<{ stripe_product_id: string | null; sync_state: string; last_error: string | null }[]>`
         SELECT stripe_product_id, sync_state, last_error FROM stripe_product_mappings WHERE offer_id = ${id}`;
-      if (!pm?.stripe_product_id) problems.push({ rule: 'offer.stripe_product', message: 'Link the offer to its Stripe product (prod_…) before activating' });
-      else if (pm.sync_state !== 'synced') problems.push({ rule: 'offer.stripe_product', message: `Stripe product ${pm.stripe_product_id} is not verified (${pm.sync_state}${pm.last_error ? `: ${pm.last_error}` : ''}); verify or relink it` });
+      if (pm?.stripe_product_id && pm.sync_state !== 'synced') problems.push({ rule: 'offer.stripe_product', message: `Stripe product ${pm.stripe_product_id} is not verified (${pm.sync_state}${pm.last_error ? `: ${pm.last_error}` : ''}); verify or relink it` });
       if (problems.length) throw new AppError('precondition_failed', problems.map((p) => p.message).join('; '), { problems });
     }
     await tx`UPDATE offers SET status = ${status} WHERE id = ${id}`;

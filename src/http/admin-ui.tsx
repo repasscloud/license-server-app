@@ -13,7 +13,7 @@ import { listAudit } from '../services/audit.ts';
 import * as admins from '../services/admins.ts';
 import * as billing from '../services/billing.ts';
 import * as catalogue from '../services/catalogue.ts';
-import { importCatalogue, type ImportResult } from '../services/catalogue-import.ts';
+import * as catalogueImport from '../services/catalogue-import.ts';
 import { getInvoice, invoiceNumber, listInvoices, renderInvoicePdf } from '../services/invoices.ts';
 import { listCheckouts } from '../services/checkout.ts';
 import * as customers from '../services/customers.ts';
@@ -257,6 +257,7 @@ adminUi.get('/products', async (c) => {
     body: (
       <>
         <h1>Products</h1>
+        {importButton(c)}
         <div class="table-wrap"><table><thead><tr><th>Product id</th><th>Name</th><th>Status</th><th>Visibility</th><th>Majors</th></tr></thead><tbody>
           {rows.map((p) => <tr><td><a href={`/admin/products/${p.id}`}><code>{p.slug}</code></a></td><td>{p.name}</td><td><Badge v={p.status} /></td><td>{p.visibility}</td><td>{p.majors}</td></tr>)}
         </tbody></table></div>
@@ -422,7 +423,7 @@ adminUi.get('/offers', async (c) => {
     body: (
       <>
         <h1>Offers (SKUs)</h1>
-        {can(c, 'products:write') && can(c, 'prices:write') ? <p><a href="/admin/catalogue/import">Import offers from the catalogue CSV</a></p> : null}
+        {importButton(c)}
         <div class="table-wrap"><table><thead><tr><th>SKU</th><th>Name</th><th>Kind</th><th>Billing</th><th>Status</th><th>Components</th><th>Active prices</th></tr></thead><tbody>
           {rows.map((o) => <tr><td><a href={`/admin/offers/${o.id}`}><code>{o.sku}</code></a></td><td>{o.name}</td><td>{o.kind}</td><td>{o.billing}</td><td><Badge v={o.status} /></td><td>{o.components}</td><td>{o.active_prices}</td></tr>)}
         </tbody></table></div>
@@ -468,14 +469,14 @@ adminUi.get('/offers/:id', async (c) => {
         <h1>{o.name} <code>{o.sku}</code> <Badge v={o.status} /></h1>
         <p class="muted">{o.kind} · {o.billing} · Stripe product: <code>{String(o.stripeProduct?.stripe_product_id ?? 'not linked')}</code>
           {o.stripeProduct?.stripe_product_id ? <> {String(o.stripeProduct.synced_name ?? '')} <Badge v={String(o.stripeProduct.sync_state)} /></> : null}</p>
-        {o.status !== 'archived' && !o.stripeProduct?.stripe_product_id ? <div class="flash err" role="alert">Not sellable: link the Stripe product (prod_…) that holds this offer's name, description and image for Checkout.</div> : null}
+        {o.status !== 'archived' && !o.stripeProduct?.stripe_product_id ? <p class="muted">No Stripe product linked yet: link the one the Stripe script created (prod_…), or one is created from this offer at its first checkout.{o.stripeProduct?.last_error ? ` Last attempt failed: ${String(o.stripeProduct.last_error)}` : ''}</p> : null}
         {o.stripeProduct?.stripe_product_id && o.stripeProduct.sync_state === 'failed' ? <div class="flash err" role="alert">Stripe product problem: {String(o.stripeProduct.last_error ?? 'unknown')}</div> : null}
         {can(c, 'products:write') && o.status !== 'archived' ? (
           <form class="card" method="post" action={`/admin/offers/${o.id}/stripe-product`}><Csrf token={c.get('csrf')} />
             <label for="spid">Stripe product ID</label>
             <div class="row"><input id="spid" name="stripeProductId" required pattern="prod_[A-Za-z0-9]+" placeholder="prod_…" value={String(o.stripeProduct?.stripe_product_id ?? '')} />
               <button type="submit">{o.stripeProduct?.stripe_product_id ? 'Relink' : 'Link'} Stripe product</button></div>
-            <p class="muted">Create the product in Stripe (name, description, image), then paste its ID. Prices stay in this database and are sent to Checkout against this product; the server never creates or renames Stripe products.</p>
+            <p class="muted">Normally the product is created in Stripe first (name, description, image) and linked here or by the CSV import. Prices stay in this database and are sent to Checkout against this product; the server never renames Stripe products.</p>
           </form>
         ) : null}
         {can(c, 'products:write') ? (
@@ -526,64 +527,115 @@ adminUi.post('/offers/:id/sync', action(async (c) => {
   await stripeSync.syncOffer(c.get('deps').sql, c.get('deps').stripe, c.req.param('id')!, c.get('actor'));
   return back(c, `/admin/offers/${c.req.param('id')}`, 'Stripe product verified');
 }));
-// --- catalogue CSV import (same service as POST /api/admin/v1/catalogue/import) --------------
-const importForm = (c: Ctx, csv = '') => (
-  <form class="card" method="post" action="/admin/catalogue/import" enctype="multipart/form-data"><Csrf token={c.get('csrf')} />
-    <label for="csvfile">CSV file (the stripe-catalogue products.csv)</label><input id="csvfile" name="file" type="file" accept=".csv,text/csv" />
-    <label for="csvtext">…or paste the CSV</label><textarea id="csvtext" name="csv" rows={6}>{csv}</textarea>
-    <button type="submit">Check (dry run)</button>
-  </form>
-);
+// --- catalogue CSV import (same services as /api/admin/v1/catalogue/imports) -----------------
+const IMPORTS = '/admin/catalogue/imports';
+const canImport = (c: Ctx) => can(c, 'products:write') && can(c, 'prices:write');
+const importButton = (c: Ctx) => (canImport(c) ? <p><a class="button" href={IMPORTS}>Import CSV</a></p> : null);
+const lines = (xs: string[], cls = '') => (xs.length ? <ul class={cls}>{xs.map((x) => <li>{x}</li>)}</ul> : null);
 
-const importTable = (r: ImportResult) => (
-  <div class="table-wrap"><table><thead><tr><th>Line</th><th>SKU</th><th>Name</th><th>Result</th><th>Changes</th><th>Notes</th></tr></thead><tbody>
-    {r.rows.map((x) => <tr><td>{x.line}</td><td>{x.offerId ? <a href={`/admin/offers/${x.offerId}`}><code>{x.sku}</code></a> : <code>{x.sku}</code>}</td><td>{x.name}</td>
-      <td><Badge v={x.action} /></td><td>{x.changes.join('; ') || '—'}</td><td class="muted">{[x.error, ...x.warnings].filter(Boolean).join('; ')}</td></tr>)}
-  </tbody></table></div>
-);
-
-adminUi.get('/catalogue/import', async (c) => {
-  if (!can(c, 'products:write') || !can(c, 'prices:write')) throw new AppError('forbidden', 'Missing permission products:write / prices:write');
+adminUi.get('/catalogue/imports', async (c) => {
+  if (!can(c, 'products:read')) throw new AppError('forbidden', 'Missing permission products:read');
+  const rows = await catalogueImport.listImports(c.get('deps').sql, { limit: 50 });
   return render(c, {
-    title: 'Import offers',
+    title: 'Catalogue imports',
     body: (
       <>
-        <h1>Import offers from the catalogue CSV</h1>
-        <p class="muted">Only rows with <code>_ls:import</code> = yes are imported; every other row is skipped. License-server columns use the <code>_ls:</code> prefix
-          (product, major, edition, billing, prices per currency…) and <code>product_id</code> links the Stripe product the Stripe script created.
-          Each row creates or updates one offer, sets changed prices, links the product and, with <code>_ls:activate</code> = yes, activates it.
-          A dry run comes first; nothing changes until you apply. See <code>stripe-catalogue/README-LICENSE-SERVER.md</code>.</p>
-        {importForm(c)}
+        <h1>Import products from the catalogue CSV</h1>
+        <p class="muted">Upload the same <code>products.csv</code> the Stripe script uses. Rows with <code>_ls:import</code> = yes become offers (with their product,
+          major and edition when those do not exist yet); every other row is skipped. You get a preview first: nothing in the licence server or Stripe changes until you confirm.
+          Differences between the CSV, the licence server and Stripe are reported as errors for you to resolve; the import never overwrites either side.
+          Columns: <code>stripe-catalogue/README-LICENSE-SERVER.md</code>.</p>
+        {canImport(c) ? (
+          <form class="card" method="post" action={IMPORTS} enctype="multipart/form-data"><Csrf token={c.get('csrf')} />
+            <label for="csvfile">CSV file</label><input id="csvfile" name="file" type="file" accept=".csv,text/csv" required />
+            <button type="submit">Upload and preview</button>
+          </form>
+        ) : null}
+        <h2>Recent imports</h2>
+        <div class="table-wrap"><table><thead><tr><th>Uploaded</th><th>File</th><th>By</th><th>Status</th><th>Stripe</th><th>Create</th><th>Link</th><th>Update</th><th>Unchanged</th><th>Errors</th></tr></thead><tbody>
+          {rows.map((r) => <tr><td><a href={`${IMPORTS}/${r.id}`}>{fmt(r.createdAt)}</a></td><td>{r.fileName ?? '—'}</td><td>{r.createdBy}</td><td><Badge v={r.status} /></td><td>{r.stripeMode}</td>
+            <td>{r.summary.create}</td><td>{r.summary.link}</td><td>{r.summary.update}</td><td>{r.summary.unchanged}</td><td>{r.summary.errors + r.summary.entityErrors}</td></tr>)}
+        </tbody></table></div>
       </>
     ),
   });
 });
-adminUi.post('/catalogue/import', action(async (c, f) => {
+
+adminUi.post('/catalogue/imports', action(async (c) => {
   const body = await c.req.parseBody();
   const file = body.file;
-  const csv = file instanceof File && file.size > 0 ? await file.text() : (f.csv ?? '');
-  const apply = f.apply === 'true';
-  const r = await importCatalogue(c.get('deps').sql, c.get('deps').stripe, c.get('actor'), { csv, apply });
-  const summary = `${r.selected} selected, ${r.skipped} skipped · ${r.created} create, ${r.updated} update, ${r.unchanged} unchanged, ${r.errors} error(s)`;
+  if (!(file instanceof File) || file.size === 0) throw new AppError('invalid_request', 'Choose the CSV file to upload');
+  const imp = await catalogueImport.previewImport(c.get('deps').sql, c.get('deps').stripe, c.get('actor'), { csv: await file.text(), fileName: file.name });
+  return c.redirect(`${IMPORTS}/${imp.id}`, 303);
+}));
+
+adminUi.get('/catalogue/imports/:id', async (c) => {
+  if (!can(c, 'products:read')) throw new AppError('forbidden', 'Missing permission products:read');
+  const imp = await catalogueImport.getImport(c.get('deps').sql, c.req.param('id'));
+  const { plan, result, summary } = imp;
+  const resultByLine = new Map((result?.rows ?? []).map((r) => [r.line, r]));
+  const resultByEntity = new Map((result?.entities ?? []).map((e) => [e.key, e]));
+  const pending = imp.status === 'previewed';
+  const todo = summary.create + summary.link + summary.update + summary.entitiesToCreate;
   return render(c, {
-    title: apply ? 'Import applied' : 'Import check',
+    title: 'Catalogue import',
     body: (
       <>
-        <h1>{apply ? 'Import applied' : 'Import check (dry run: nothing changed yet)'}</h1>
-        <p class={r.errors ? 'flash err' : 'flash ok'} role="status">{summary}</p>
-        {importTable(r)}
-        {!apply && r.selected > 0 ? (
-          <form class="card" method="post" action="/admin/catalogue/import"><Csrf token={c.get('csrf')} />
-            <textarea name="csv" hidden>{csv}</textarea><input type="hidden" name="apply" value="true" />
-            <p class="muted">{r.errors ? 'Rows with errors will fail again; the other rows are applied independently.' : 'Applies exactly the changes listed above.'}</p>
-            <button type="submit">Apply import</button>
+        <h1>Catalogue import <Badge v={imp.status} /></h1>
+        <p class="muted">{imp.fileName ?? 'CSV'} · uploaded {fmt(imp.createdAt)} by {imp.createdBy} · Stripe {imp.stripeMode} mode
+          {imp.appliedAt ? <> · applied {fmt(imp.appliedAt)} by {imp.appliedBy}</> : null} · sha256 <code>{imp.csvSha256.slice(0, 12)}…</code></p>
+        <p class={summary.errors + summary.entityErrors ? 'flash err' : 'flash ok'} role="status">
+          {summary.selected} row(s) to import, {summary.skipped} skipped · {summary.create} create, {summary.link} link, {summary.update} update, {summary.unchanged} unchanged,
+          {' '}{summary.errors} rejected · {summary.entitiesToCreate} product/major/edition to create, {summary.entityErrors} with errors</p>
+        {pending ? <p class="muted">Preview only: nothing has changed yet.</p> : null}
+        {plan.entities.length ? (
+          <>
+            <h2>Products, majors and editions</h2>
+            <div class="table-wrap"><table><thead><tr><th>What</th><th>Lines</th><th>Plan</th><th>Details</th>{result ? <th>Result</th> : null}</tr></thead><tbody>
+              {plan.entities.map((e) => {
+                const r = resultByEntity.get(e.key);
+                return <tr><td>{e.label}</td><td>{e.lines.join(', ')}</td><td><Badge v={e.action} /></td><td>{lines(e.changes)}{lines(e.errors, 'err')}</td>
+                  {result ? <td>{r ? <><Badge v={r.outcome} /> {r.error ?? ''}</> : '—'}</td> : null}</tr>;
+              })}
+            </tbody></table></div>
+          </>
+        ) : null}
+        <h2>Offers (one per CSV row)</h2>
+        <div class="table-wrap"><table><thead><tr><th>Line</th><th>SKU</th><th>Name</th><th>Stripe product</th><th>Plan</th><th>Changes</th><th>Notes</th>{result ? <th>Result</th> : null}</tr></thead><tbody>
+          {plan.rows.map((x) => {
+            const r = resultByLine.get(x.line);
+            const offerId = r?.offerId ?? x.offerId;
+            return <tr><td>{x.line}</td><td>{offerId ? <a href={`/admin/offers/${offerId}`}><code>{x.sku}</code></a> : <code>{x.sku || '—'}</code>}</td><td>{x.name}</td>
+              <td>{x.stripeProductId ? <code>{x.stripeProductId}</code> : '—'}</td><td><Badge v={x.action} /></td><td>{lines(x.changes) ?? '—'}</td>
+              <td>{lines(x.errors, 'err')}{lines(x.warnings, 'muted')}</td>
+              {result ? <td>{r ? <><Badge v={r.outcome} />{lines(r.error ? [r.error] : [], 'err')}</> : '—'}</td> : null}</tr>;
+          })}
+        </tbody></table></div>
+        {pending && canImport(c) ? (
+          <form class="card" method="post" action={`${IMPORTS}/${imp.id}/apply`}><Csrf token={c.get('csrf')} />
+            <p>{todo ? `Apply the ${todo} change(s) listed above as ${c.get('actor')?.label ?? 'you'}.` : 'Nothing to change: applying only records that the catalogue matches this file.'}
+              {summary.errors + summary.entityErrors ? ' Rejected rows are not applied; fix them and upload the CSV again.' : ''}
+              {' '}If the catalogue or Stripe changed since this preview, nothing is applied and you will see the updated preview.</p>
+            <button type="submit">Confirm and apply</button>
           </form>
         ) : null}
-        <h2>Import another file</h2>
-        {importForm(c)}
+        <p><a href={IMPORTS}>All imports</a></p>
       </>
     ),
   });
+});
+
+adminUi.post('/catalogue/imports/:id/apply', action(async (c) => {
+  const id = c.req.param('id')!;
+  try {
+    const imp = await catalogueImport.applyImport(c.get('deps').sql, c.get('deps').stripe, c.get('actor'), id);
+    const n = imp.result!.counts;
+    return back(c, `${IMPORTS}/${id}`, `Import applied: ${n.applied} offer(s) changed, ${n.entitiesCreated} product/major/edition created, ${n.unchanged} unchanged, ${n.errors + n.partial} not applied`, n.errors + n.partial ? 'err' : 'ok');
+  } catch (e) {
+    const ae = toAppError(e);
+    if (ae.code === 'conflict') return back(c, `${IMPORTS}/${id}`, ae.message, 'err');
+    throw e;
+  }
 }));
 
 adminUi.post('/offers/:id/stripe-product', action(async (c, f) => {

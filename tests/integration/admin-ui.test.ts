@@ -9,6 +9,7 @@ import { makeDeps } from '../../src/http/context.ts';
 import { CaptureTransport } from '../../src/integrations/mail.ts';
 import { dispatchEmails } from '../../src/services/email.ts';
 import { freshDatabase } from '../helpers/db.ts';
+import { FakeStripe } from '../helpers/fake-providers.ts';
 import { testEnv } from '../helpers/fixtures.ts';
 import { Client, httpEnv } from '../helpers/http.ts';
 
@@ -16,6 +17,7 @@ let sql: Sql;
 let drop: () => Promise<void>;
 let env: Env;
 let ui: Client;
+let stripe: FakeStripe;
 let totpSecret = '';
 
 async function flushMail() {
@@ -36,13 +38,18 @@ async function loginLink(email: string, realm: 'admin' | 'portal'): Promise<stri
 beforeAll(async () => {
   let url: string;
   ({ sql, drop, url } = await freshDatabase());
-  env = httpEnv(url, testEnv());
+  const base = testEnv();
+  stripe = await new FakeStripe(base.STRIPE_WEBHOOK_SECRET as string).start();
+  env = httpEnv(url, { ...base, STRIPE_API_BASE: stripe.url });
   loadConfig(env);
   await sql`INSERT INTO admin_users (id, email, display_name) VALUES ('adm_root', 'root@example.test', 'Root')`;
   await sql`INSERT INTO admin_user_roles (admin_user_id, role_id) VALUES ('adm_root', 'superadmin')`;
   ui = new Client(env);
 });
-afterAll(async () => drop?.());
+afterAll(async () => {
+  await stripe?.stop();
+  await drop?.();
+});
 
 describe('administrator sign-in', () => {
   it('requires login for admin pages', async () => {
@@ -98,27 +105,47 @@ describe('admin pages are functional', () => {
     expect(a).toEqual({ actor_type: 'admin', actor_id: 'adm_root' });
   });
 
-  it('imports the catalogue CSV from an uploaded file: dry run first, then apply', async () => {
-    const page = await (await ui.request('/admin/catalogue/import')).text();
-    expect(page).toMatch(/<h1>Import offers from the catalogue CSV<\/h1>/);
+  it('imports the catalogue CSV: Import CSV button, upload, preview, confirm, result', async () => {
+    expect(await (await ui.request('/admin/products')).text()).toContain('href="/admin/catalogue/imports">Import CSV</a>');
+    expect(await (await ui.request('/admin/offers')).text()).toContain('href="/admin/catalogue/imports">Import CSV</a>');
+    const page = await (await ui.request('/admin/catalogue/imports')).text();
+    expect(page).toMatch(/<h1>Import products from the catalogue CSV<\/h1>/);
     expect(page).toContain('enctype="multipart/form-data"');
-    const csv = '﻿product_id,name,_meta:sku,_ls:import,_ls:product,_ls:major,_ls:edition,_ls:billing,_ls:price:aud\n'
-      + 'prod_Book1,"AI for Normal People — PDF",ai-pdf,,,,,,\n'
-      + 'prod_UiApp1,UI App Enterprise,uiapp1-ent,yes,uiapp,1,enterprise,one_time,1000\n';
+    // The product exists (created above); its major and edition come from the CSV.
+    const prod = stripe.createProductDirect('UI App Enterprise', { description: '', metadata: { sku: 'uiapp1-ent' } });
+    const csv = '﻿product_id,name,_meta:sku,_ls:import,_ls:product,_ls:major,_ls:protocol,_ls:edition,_ls:edition_name,_ls:edition_activation_model,_ls:edition_ownership,_ls:edition_offline_policy,_ls:billing,_ls:price:aud\n'
+      + 'prod_Book1,"AI for Normal People — PDF",ai-pdf,,,,,,,,,,,\n'
+      + `${prod},UI App Enterprise,uiapp1-ent,yes,uiapp,1,repass-v1,enterprise,Enterprise,none,organisation,indefinite,one_time,1000\n`;
     const form = new FormData();
-    form.set('_csrf', await ui.csrfFrom('/admin/catalogue/import'));
+    form.set('_csrf', await ui.csrfFrom('/admin/catalogue/imports'));
     form.set('file', new File([csv], 'products.csv', { type: 'text/csv' }));
-    form.set('csv', '');
-    const r = await ui.request('/admin/catalogue/import', { method: 'POST', body: form, headers: { origin: 'http://localhost:8787' } });
-    const html = await r.text();
-    expect(html).toMatch(/Import check \(dry run: nothing changed yet\)/);
-    expect(html).toMatch(/1 selected, 1 skipped/);
-    // The product exists but has no major/edition yet: the row explains what to create first.
-    expect(html).toMatch(/No active enterprise edition policy for uiapp v1: create the product, major and edition policy first/);
-    expect(html).toContain('Apply import');
-    const applied = await ui.request('/admin/catalogue/import', { method: 'POST', form: { _csrf: await ui.csrfFrom('/admin/catalogue/import'), csv, apply: 'true' } });
-    expect(await applied.text()).toMatch(/<h1>Import applied<\/h1>/);
-    expect((await sql`SELECT 1 FROM audit_events WHERE action = 'catalogue.imported'`).length).toBe(1);
+    const r = await ui.request('/admin/catalogue/imports', { method: 'POST', body: form, headers: { origin: 'http://localhost:8787' } });
+    expect(r.status).toBe(303);
+    const previewUrl = r.headers.get('location')!;
+    expect(previewUrl).toMatch(/^\/admin\/catalogue\/imports\/imp_[0-9A-Z]{26}$/);
+    const html = await (await ui.request(previewUrl)).text();
+    expect(html).toContain('Preview only: nothing has changed yet.');
+    expect(html).toMatch(/1 row\(s\) to import, 1 skipped · 1 create/);
+    expect(html).toContain('create major uiapp v1 on protocol repass-v1');
+    expect(html).toContain(`link Stripe product ${prod}`);
+    expect(html).toMatch(/no active price for USD, EUR/);
+    expect(html).toContain('Confirm and apply');
+    expect((await sql`SELECT 1 FROM offers WHERE sku = 'uiapp1-ent'`).length).toBe(0);
+
+    const applied = await ui.request(`${previewUrl}/apply`, { method: 'POST', form: { _csrf: await ui.csrfFrom(previewUrl) } });
+    expect(applied.status).toBe(303);
+    expect(decodeURIComponent(applied.headers.get('location')!)).toMatch(/Import applied: 1 offer\(s\) changed, 2 product\/major\/edition created/);
+    const after = await (await ui.request(previewUrl)).text();
+    expect(after).toMatch(/Catalogue import <span class="badge ok">applied<\/span>/);
+    expect(after).not.toContain('Confirm and apply');
+    const [o] = await sql<{ stripe_product_id: string }[]>`SELECT pm.stripe_product_id FROM offers o JOIN stripe_product_mappings pm ON pm.offer_id = o.id WHERE o.sku = 'uiapp1-ent'`;
+    expect(o!.stripe_product_id).toBe(prod);
+    // Attributed to the signed-in administrator, through the same audited services as the API.
+    const audits = await sql<{ action: string; actor_type: string; actor_id: string }[]>`
+      SELECT action, actor_type, actor_id FROM audit_events WHERE action IN ('catalogue.import_previewed', 'catalogue.import_applied', 'offer.created', 'product_major.created')`;
+    expect(audits.length).toBe(4);
+    for (const a of audits) expect(a).toMatchObject({ actor_type: 'admin', actor_id: 'adm_root' });
+    expect(await (await ui.request('/admin/catalogue/imports')).text()).toContain('products.csv');
   });
 
   it('high-risk actions require a recent TOTP step-up', async () => {

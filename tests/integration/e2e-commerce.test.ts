@@ -717,12 +717,10 @@ describe('store: one customer per email, flat tax, prices registered from Stripe
     expect(set.prices.find((p: any) => p.currency === 'aud')).toMatchObject({ unit_amount: 10000, tax_rate_bps: 1000, tax_label: 'GST', status: 'active' });
     // Tax rate and label go together.
     expect((await api('POST', '/prices', { offerId: ids.offer_edu, currency: 'aud', unitAmount: 1, taxRatePercent: 10 })).status).toBe(422);
-    // Fully priced but not linked to a Stripe product: not activatable, not sellable.
-    const unlinked = await api('POST', `/offers/${ids.offer_edu}/status`, { status: 'active' });
-    expect(unlinked.status).toBe(412);
-    expect(unlinked.body.error.message).toMatch(/Link the offer to its Stripe product/);
-    await ok('PUT', `/offers/${ids.offer_edu}/stripe-product`, { stripeProductId: stripe.createProductDirect('CurseDelete 2 Education') });
+    // Fully priced but never created in Stripe (database first): activatable; its Stripe product
+    // is created at the first checkout.
     await ok('POST', `/offers/${ids.offer_edu}/status`, { status: 'active' });
+    expect((await sql`SELECT stripe_product_id FROM stripe_product_mappings WHERE offer_id = ${ids.offer_edu!}`)[0]!.stripe_product_id).toBeNull();
   });
 
   it('shows every currency from the database, with tax added on top', async () => {
@@ -823,11 +821,17 @@ describe('store: one customer per email, flat tax, prices registered from Stripe
     expect((await custRows('shared@buyer.example'))[0]!.stripe_customer_id).toBe('cus_from_other_project');
   });
 
-  it('never created a Stripe product across every checkout in this run', async () => {
+  it('created a Stripe product only for the offer never linked, once, and reused it', async () => {
     expect(stripe.requests.filter((r) => r.path === '/v1/checkout/sessions').length).toBeGreaterThan(5);
-    expect(stripe.requests.filter((r) => r.method === 'POST' && r.path === '/v1/products').length).toBe(0);
-    // Every Checkout line item referenced a product linked by the owner.
+    const created = stripe.requests.filter((r) => r.method === 'POST' && r.path === '/v1/products');
+    expect(created.length).toBe(1);
+    expect(created[0]).toMatchObject({ idempotencyKey: `repass-product-${ids.offer_edu}`,
+      params: { name: 'Education perpetual', metadata: { repass_offer_id: ids.offer_edu, repass_sku: 'cd2-education', sku: 'cd2-education' } } });
+    const [m] = await sql<{ stripe_product_id: string }[]>`SELECT stripe_product_id FROM stripe_product_mappings WHERE offer_id = ${ids.offer_edu!}`;
+    const sessions = stripe.requests.filter((x) => x.path === '/v1/checkout/sessions');
+    expect(sessions.filter((r) => (r.params as any).line_items[0].price_data.product === m!.stripe_product_id).length).toBeGreaterThan(1);
+    // Every Checkout line item referenced the product recorded on its checkout.
     const linked = new Set((await sql<{ stripe_product_id: string }[]>`SELECT stripe_product_id FROM checkouts WHERE stripe_product_id IS NOT NULL`).map((r) => r.stripe_product_id));
-    for (const r of stripe.requests.filter((x) => x.path === '/v1/checkout/sessions')) expect(linked.has((r.params as any).line_items[0].price_data.product)).toBe(true);
+    for (const r of sessions) expect(linked.has((r.params as any).line_items[0].price_data.product)).toBe(true);
   });
 });

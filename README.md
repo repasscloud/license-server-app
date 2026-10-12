@@ -3,7 +3,7 @@
 RePassCloud's licensing and commerce platform. It is a multi-product, multi-version, data-driven system that runs as **one Cloudflare Worker** (Workers Free plan). Production URL: `https://license-server.repasscloud.com`.
 
 - **PostgreSQL (Supabase-hosted, provider-portable)** is the source of truth. It holds every product, major version, edition policy, offer, price, entitlement, licence, activation, the signing-key registry, the job outbox and the audit log.
-- **Stripe** handles checkout, billing, and payment and subscription events. Prices live only in the database and are sent inline at Checkout; each offer is linked to a Stripe Product (name, description, image) created in Stripe and mapped by ID. Stripe is never the catalogue.
+- **Stripe** handles checkout, billing, and payment and subscription events. Prices live only in the database and are sent inline at Checkout; each offer is linked to a Stripe Product (name, description, image), normally created in Stripe first and mapped by ID (or created by the server at the offer's first checkout). Stripe is never the catalogue. The catalogue CSV (`stripe-catalogue/products.csv`) is imported through **Import CSV** in the admin portal or the admin API (preview, then confirm).
 - **MailerSend** delivers transactional email through a durable, encrypted outbox.
 - **Wire compatibility:** the binding `repass-license-v1` / `repass-activation-v1` contract is implemented exactly (`docs/requirements/upstream/LICENSING-SERVER-BRIEF.md`). It is verified against the official test vectors and against **CurseDelete's real client verifier**.
 

@@ -15,7 +15,7 @@ import type { Actor } from './actor.ts';
 import { audit } from './audit.ts';
 import { loadPolicyRows, resolvePurchasable } from './catalogue.ts';
 import { normaliseEmail, resolveStoreCustomer } from './customers.ts';
-import { ensureStripeCustomer, ensureStripeTaxRate, linkedStripeProduct } from './stripe-sync.ts';
+import { ensureStripeCustomer, ensureStripeProduct, ensureStripeTaxRate } from './stripe-sync.ts';
 
 export const CreateCheckoutInput = z.object({
   sku: z.string().regex(/^[A-Za-z0-9_.-]{1,100}$/),
@@ -146,7 +146,7 @@ async function startStripeSession(sql: Sql, config: Config, stripe: StripeClient
   let stripeCustomerId: string | null = null;
   let stripeProductId: string;
   try {
-    stripeProductId = await linkedStripeProduct(sql, c.snapshot.offer.id);
+    stripeProductId = await ensureStripeProduct(sql, stripe, c.snapshot.offer.id);
     if (p.taxRateBps && p.taxLabel) taxRateId = await ensureStripeTaxRate(sql, stripe, p.taxLabel, p.taxRateBps);
     if (c.customer_id) stripeCustomerId = await ensureStripeCustomer(sql, stripe, c.customer_id);
   } catch (e) {
