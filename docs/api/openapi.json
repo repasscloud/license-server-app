@@ -244,7 +244,8 @@
               "example": {
                 "slug": "cursedelete",
                 "name": "CurseDelete",
-                "description": "Secure deletion tool"
+                "description": "Secure deletion tool",
+                "imageUrl": "/assets/cursedelete.svg"
               }
             }
           }
@@ -356,7 +357,7 @@
         "tags": [
           "Catalogue"
         ],
-        "summary": "Update product (name, description, status, visibility)",
+        "summary": "Update product (name, description, status, visibility, imageUrl: HTTP(S) or site-relative path; null clears artwork)",
         "description": "Requires scope `products:write`.",
         "security": [
           {
@@ -389,7 +390,8 @@
                 "type": "object"
               },
               "example": {
-                "status": "active"
+                "status": "active",
+                "imageUrl": "https://example.com/cursedelete.png"
               }
             }
           }
@@ -1048,7 +1050,7 @@
         "tags": [
           "Catalogue"
         ],
-        "summary": "Update offer metadata (components are immutable once created)",
+        "summary": "Update offer metadata; organisationDetails is auto, required or none (none only for individual ownership); components are immutable",
         "description": "Requires scope `products:write`.",
         "security": [
           {
@@ -1079,6 +1081,10 @@
             "application/json": {
               "schema": {
                 "type": "object"
+              },
+              "example": {
+                "description": "Personal licence",
+                "organisationDetails": "auto"
               }
             }
           }

@@ -14,6 +14,7 @@ import { type AppEnv, baseMiddleware, bodyLimit, logError, securityHeaders } fro
 import { portalUi, storeUi } from './http/portal-ui.tsx';
 import { webhooks } from './http/webhooks.ts';
 import { APP_CSS, APP_JS } from './views/assets.ts';
+import { BRAND_MARK, STRIPE_MARK } from './views/brand.ts';
 import { Layout } from './views/layout.tsx';
 
 export const app = new Hono<AppEnv>();
@@ -22,7 +23,8 @@ app.use('*', securityHeaders);
 app.get('/healthz', (c) => c.json({ status: 'ok' }));
 app.get('/assets/app.css', (c) => c.body(APP_CSS, 200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }));
 app.get('/assets/app.js', (c) => c.body(APP_JS, 200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }));
-app.get('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /\n'));
+app.get('/assets/brand.svg', c => c.body(BRAND_MARK, 200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' }));
+app.get('/assets/stripe.svg', c => c.body(STRIPE_MARK, 200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' }));
 
 app.use('*', baseMiddleware);
 app.use('/api/*', bodyLimit(256 * 1024));
@@ -40,6 +42,8 @@ app.get('/readyz', async (c) => {
   }
 });
 
+app.get('/robots.txt', c => c.text(`User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /portal\nDisallow: /checkout\nDisallow: /api/\nDisallow: /v1/\nDisallow: /webhooks/\nDisallow: /healthz\nDisallow: /readyz\nSitemap: ${new URL('/sitemap.xml', c.get('deps').config.publicBaseUrl).href}\n`));
+
 app.route('/webhooks', webhooks);
 app.route('/api/admin/v1', adminApi);
 app.route('/admin', adminUi);
@@ -47,7 +51,7 @@ app.route('/portal', portalUi);
 app.route('/', storeUi);
 
 app.get('/', (c) => c.html(
-  <Layout title="Licensing" realm="public">
+  <Layout title="Licensing" realm="public" indexable description="RePass Cloud software licences and customer portal." canonical={new URL('/', c.get('deps').config.publicBaseUrl).href}>
     <h1>RePassCloud Licensing</h1>
     <div class="grid">
       <a class="card" href="/store"><h2>Store</h2><p>Buy or register RePassCloud products.</p></a>

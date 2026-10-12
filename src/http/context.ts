@@ -94,7 +94,7 @@ export const securityHeaders: MiddlewareHandler<AppEnv> = async (c, next) => {
   h.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
   h.set(
     'Content-Security-Policy',
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; " +
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https: http:; connect-src 'self'; font-src 'self'; base-uri 'none'; " +
       "frame-ancestors 'none'; form-action 'self' https://checkout.stripe.com https://billing.stripe.com",
   );
   if (new URL(c.req.url).protocol === 'https:') h.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');

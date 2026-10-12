@@ -266,6 +266,7 @@ adminUi.get('/products', async (c) => {
             <form method="post" action="/admin/products"><Csrf token={c.get('csrf')} />
               <div class="row"><div><label for="slug">Product id (immutable wire productId)</label><input id="slug" name="slug" pattern="[a-z0-9][a-z0-9_.-]{0,63}" required /></div>
                 <div><label for="name">Name</label><input id="name" name="name" required /></div></div>
+              <label for="imageUrl">Product image or logo URL</label><input id="imageUrl" name="imageUrl" placeholder="https://example.com/logo.png or /assets/logo.svg" /><p class="muted">Use an HTTP(S) URL or a path on this site beginning with /.</p>
               <label for="description">Description</label><textarea id="description" name="description"></textarea>
               <label for="visibility">Visibility</label><select id="visibility" name="visibility"><option>public</option><option>private</option></select>
               <button type="submit">Create product (draft)</button>
@@ -277,7 +278,7 @@ adminUi.get('/products', async (c) => {
 });
 
 adminUi.post('/products', action(async (c, f) => {
-  const p = await catalogue.createProduct(c.get('deps').sql, c.get('actor'), { slug: f.slug, name: f.name, description: f.description ?? '', visibility: f.visibility });
+  const p = await catalogue.createProduct(c.get('deps').sql, c.get('actor'), { slug: f.slug, name: f.name, description: f.description ?? '', imageUrl: strOrNull(f.imageUrl), visibility: f.visibility });
   return back(c, `/admin/products/${p.id}`, 'Product created');
 }));
 
@@ -294,6 +295,7 @@ adminUi.get('/products/:id', async (c) => {
             <div class="row"><div><label for="name">Name</label><input id="name" name="name" value={p.name} /></div>
               <div><label for="status">Status</label><select id="status" name="status">{['draft', 'active', 'retired'].map((s) => <option selected={s === p.status}>{s}</option>)}</select></div>
               <div><label for="visibility">Visibility</label><select id="visibility" name="visibility">{['public', 'private'].map((s) => <option selected={s === p.visibility}>{s}</option>)}</select></div></div>
+            <label for="imageUrl">Product image or logo URL</label><input id="imageUrl" name="imageUrl" value={p.image_url ?? ''} placeholder="https://example.com/logo.png or /assets/logo.svg" /><p class="muted">Use an HTTP(S) URL or a path on this site beginning with /. The storefront uses this artwork.</p>
             <label for="description">Description</label><textarea id="description" name="description">{p.description}</textarea>
             <button type="submit">Save</button></form></div>
         ) : null}
@@ -315,7 +317,7 @@ adminUi.get('/products/:id', async (c) => {
 });
 
 adminUi.post('/products/:id', action(async (c, f) => {
-  await catalogue.updateProduct(c.get('deps').sql, c.get('actor'), c.req.param('id')!, { name: f.name, description: f.description, status: f.status, visibility: f.visibility });
+  await catalogue.updateProduct(c.get('deps').sql, c.get('actor'), c.req.param('id')!, { name: f.name, description: f.description, imageUrl: strOrNull(f.imageUrl), status: f.status, visibility: f.visibility });
   return back(c, `/admin/products/${c.req.param('id')}`, 'Saved');
 }));
 
@@ -436,6 +438,7 @@ adminUi.get('/offers', async (c) => {
                 <div><label for="customerKind">Customer kind</label><select id="customerKind" name="customerKind"><option>any</option><option>individual</option><option>organisation</option></select></div>
                 <div><label for="ovis">Visibility</label><select id="ovis" name="visibility"><option>public</option><option>private</option></select></div></div>
               <div class="row"><label><input type="checkbox" name="allowPromotionCodes" checked /> Allow promotion codes</label><label><input type="checkbox" name="automaticTax" /> Stripe Tax (automatic tax)</label><label><input type="checkbox" name="taxIdCollection" /> Collect tax IDs</label></div>
+              <label for="org-details">Organisation details at checkout</label><select id="org-details" name="organisationDetails"><option value="auto">From edition ownership</option><option value="required">Require business name and country</option><option value="none">Personal details only (individual editions)</option></select>
               <label for="odesc">Description</label><textarea id="odesc" name="description"></textarea>
               {[0, 1, 2].map(compRow)}
               <button type="submit">Create offer (draft)</button>
@@ -454,7 +457,7 @@ adminUi.post('/offers', action(async (c, f) => {
   }));
   const o = await catalogue.createOffer(c.get('deps').sql, c.get('actor'), {
     sku: f.sku, name: f.name, description: f.description ?? '', kind: components.length > 1 ? 'bundle' : 'single', billing: f.billing, visibility: f.visibility,
-    maxQuantity: Number(f.maxQuantity || 1), customerKind: f.customerKind, allowPromotionCodes: bool(f.allowPromotionCodes), automaticTax: bool(f.automaticTax), taxIdCollection: bool(f.taxIdCollection), components,
+    maxQuantity: Number(f.maxQuantity || 1), customerKind: f.customerKind, organisationDetails: f.organisationDetails, allowPromotionCodes: bool(f.allowPromotionCodes), automaticTax: bool(f.automaticTax), taxIdCollection: bool(f.taxIdCollection), components,
   });
   return back(c, `/admin/offers/${(o as unknown as { id: string }).id}`, 'Offer created as draft. Link its Stripe product, set prices in every currency, then activate.');
 }));
@@ -487,6 +490,12 @@ adminUi.get('/offers/:id', async (c) => {
             {can(c, 'stripe:sync') ? <form class="inline" method="post" action={`/admin/offers/${o.id}/sync`}><Csrf token={c.get('csrf')} /><button class="secondary" type="submit">Verify Stripe product</button></form> : null}
           </div>
         ) : null}
+        {can(c, 'products:write') ? <section class="card"><h2>Storefront details</h2><form method="post" action={`/admin/offers/${o.id}`}><Csrf token={c.get('csrf')} />
+          <label for="offer-name">Licence option name</label><input id="offer-name" name="name" value={String(o.name)} required />
+          <label for="offer-description">Description</label><textarea id="offer-description" name="description">{String(o.description)}</textarea>
+          <label for="org-details">Organisation details at checkout</label><select id="org-details" name="organisationDetails">{[['auto', 'From edition ownership'], ['required', 'Require business name and country'], ['none', 'Personal details only (individual editions)']].map(([value, label]) => <option value={value} selected={value === o.organisation_details}>{label}</option>)}</select>
+          <p class="muted">Organisation and institution editions always require business name and country. Personal editions normally ask for name and email only.</p><button type="submit">Save storefront details</button>
+        </form></section> : null}
         <h2>Entitlement components</h2>
         <div class="table-wrap"><table><thead><tr><th>Product</th><th>Edition</th><th>Term</th><th>Seats/unit</th><th>Qty scales seats</th><th>Trial</th><th>Grace</th><th>Refund</th><th>Dispute</th></tr></thead><tbody>
           {o.components.map((x) => <tr><td>{String(x.product_slug)} v{String(x.major_version)} <span class="muted">({String(x.protocol_id)})</span></td><td>{String(x.edition_name)}</td><td>{String(x.term_type)}{x.term_interval ? ` ${x.term_interval_count} ${x.term_interval}` : ''}</td><td>{String(x.seats_per_unit ?? '—')}</td><td>{x.quantity_scales_seats ? 'yes' : 'no'}</td><td>{String(x.trial_days ?? '—')}</td><td>{String(x.grace_days)}</td><td>{String(x.refund_action)}</td><td>{String(x.dispute_action)}</td></tr>)}
@@ -517,6 +526,11 @@ adminUi.get('/offers/:id', async (c) => {
     ),
   });
 });
+
+adminUi.post('/offers/:id', action(async (c, f) => {
+  await catalogue.updateOffer(c.get('deps').sql, c.get('actor'), c.req.param('id')!, { name: f.name, description: f.description, organisationDetails: f.organisationDetails });
+  return back(c, `/admin/offers/${c.req.param('id')}`, 'Storefront details saved');
+}));
 
 adminUi.post('/offers/:id/status', action(async (c, f) => {
   await catalogue.setOfferStatus(c.get('deps').sql, c.get('actor'), c.req.param('id')!, f.status as 'active');
@@ -929,9 +943,13 @@ adminUi.get('/keys', async (c) => {
         <h1>Signing keys</h1>
         <p class="muted">Private keys are AES-256-GCM encrypted in PostgreSQL under SIGNING_KEK_V{c.get('deps').config.signingKeks.activeVersion} (Workers Secret) and are never displayed or exported here. They are decrypted only inside the Worker to sign — this is application-level encryption, not an HSM.</p>
         <div class="table-wrap"><table><thead><tr><th>Key id</th><th>Algorithm</th><th>Status</th><th>Origin</th><th>KEK</th><th>Public key (base64url)</th><th>Created</th><th></th></tr></thead><tbody>
-          {list.map((k) => <tr><td><code>{k.keyId}</code></td><td>{k.algorithm}</td><td><Badge v={k.status} /></td><td>{k.origin}</td><td>v{k.kekVersion}</td><td><details><summary>show</summary><code>{k.publicKey}</code></details></td><td>{fmt(k.createdAt)}</td>
-            <td>{m && k.status === 'generated' ? <form class="inline" method="post" action={`/admin/keys/${k.keyId}/publish`}><Csrf token={c.get('csrf')} /><button type="submit">Publish</button></form> : null}
-              {m && (k.status === 'published' || k.status === 'generated') ? <details><summary>Retire / compromise</summary><form method="post" action={`/admin/keys/${k.keyId}/retire`}><Csrf token={c.get('csrf')} /><label>Reason</label><input name="reason" required /><label>Type key id to confirm</label><input name="confirm" required /><label><input type="checkbox" name="force" /> Force even if a product is left without eligible keys</label><label><input type="checkbox" name="compromised" /> Mark COMPROMISED</label><button class="danger" type="submit">Apply</button></form></details> : null}</td></tr>)}
+          {list.map((k) => <><tr><td><code>{k.keyId}</code></td><td>{k.algorithm}</td><td><Badge v={k.status} /></td><td>{k.origin}</td><td>v{k.kekVersion}</td><td><details><summary>Show public key</summary><code>{k.publicKey}</code></details></td><td>{fmt(k.createdAt)}</td>
+            <td>{m && k.status === 'generated' ? <form class="inline" method="post" action={`/admin/keys/${k.keyId}/publish`}><Csrf token={c.get('csrf')} /><button type="submit">Publish</button></form> : null}</td></tr>
+            {m && (k.status === 'published' || k.status === 'generated') ? <tr class="key-action-row"><td colspan={8}><details class="key-action"><summary>Retire / compromise {k.keyId}</summary>
+              <form method="post" action={`/admin/keys/${k.keyId}/retire`}><Csrf token={c.get('csrf')} />
+                <div class="row"><div><label for={`reason-${k.keyId}`}>Reason</label><input id={`reason-${k.keyId}`} name="reason" required /></div><div><label for={`confirm-${k.keyId}`}>Type key id to confirm</label><input id={`confirm-${k.keyId}`} name="confirm" required /></div></div>
+                <label><input type="checkbox" name="force" /> Force even if a product is left without eligible keys</label><label><input type="checkbox" name="compromised" /> Mark compromised</label><button class="danger" type="submit">Apply</button>
+              </form></details></td></tr> : null}</>)}
         </tbody></table></div>
         <h2>Trust and eligibility per product major</h2>
         <KeyCompatTable rows={compat} />

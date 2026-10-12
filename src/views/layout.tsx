@@ -1,19 +1,24 @@
 /** @jsxImportSource hono/jsx */
 import type { Child, FC } from 'hono/jsx';
 
-export const Layout: FC<{ title: string; realm: 'admin' | 'customer' | 'public'; who?: string | null; csrf?: string; flash?: { kind: 'ok' | 'err'; text: string } | null; children?: Child }> = (p) => (
+export const Layout: FC<{ title: string; indexable?: boolean; description?: string; canonical?: string; image?: string; realm: 'admin' | 'customer' | 'public'; who?: string | null; csrf?: string; flash?: { kind: 'ok' | 'err'; text: string } | null; children?: Child }> = (p) => (
   <html lang="en">
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <meta name="robots" content="noindex" />
+      <meta name="robots" content={p.indexable ? 'index,follow' : 'noindex,nofollow'} />
+      {p.description ? <meta name="description" content={p.description.slice(0, 300)} /> : null}
+      {p.canonical ? <link rel="canonical" href={p.canonical} /> : null}
+      {p.indexable ? <><meta property="og:title" content={`${p.title} · RePass Cloud`} /><meta property="og:type" content="website" />{p.canonical ? <meta property="og:url" content={p.canonical} /> : null}{p.description ? <meta property="og:description" content={p.description.slice(0, 300)} /> : null}{p.image ? <meta property="og:image" content={p.image} /> : null}</> : null}
+      <meta name="color-scheme" content="light dark" />
+      <link rel="icon" href="/assets/brand.svg" type="image/svg+xml" />
       <title>{p.title} · RePassCloud Licensing</title>
       <link rel="stylesheet" href="/assets/app.css" />
-      <script src="/assets/app.js" defer></script>
+      <script src="/assets/app.js"></script>
     </head>
-    <body>
+    <body class={`realm-${p.realm}`}><a class="skip-link" href="#main">Skip to content</a>
       <header class="top">
-        <span class="brand">RePassCloud {p.realm === 'admin' ? 'Admin' : p.realm === 'customer' ? 'Portal' : 'Licensing'}</span>
+        <a class="brand" href={p.realm === 'admin' ? '/admin' : '/store'}><img src="/assets/brand.svg" alt="" width="36" height="36" /><span>RePass Cloud<small>{p.realm === 'admin' ? 'Administration' : p.realm === 'customer' ? 'Customer portal' : 'Software & licensing'}</small></span></a>
         {p.realm === 'admin' && p.who ? (
           <nav aria-label="Admin">
             <a href="/admin">Overview</a><a href="/admin/products">Products</a><a href="/admin/offers">Offers</a><a href="/admin/customers">Customers</a>
@@ -32,11 +37,13 @@ export const Layout: FC<{ title: string; realm: 'admin' | 'customer' | 'public';
             </form>
           </span>
         ) : null}
+        <button class="secondary theme-toggle" type="button" data-theme-toggle aria-label="Switch colour theme" hidden>Theme</button>
       </header>
-      <main>
+      <main id="main">
         {p.flash ? <div class={`flash ${p.flash.kind}`} role={p.flash.kind === 'err' ? 'alert' : 'status'}>{p.flash.text}</div> : null}
         {p.children}
       </main>
+      <footer class="site-footer"><span>RePass Cloud</span><a href="/store">Products</a><a href="/portal">Customer portal</a><a href="https://repasscloud.com">Company</a></footer>
     </body>
   </html>
 );

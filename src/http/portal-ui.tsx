@@ -8,10 +8,9 @@ import { Hono } from 'hono';
 import type { Child } from 'hono/jsx';
 import type { Db } from '../db/client.ts';
 import { AppError, notFound } from '../lib/errors.ts';
-import { newId } from '../lib/ids.ts';
 import type { Actor } from '../services/actor.ts';
 import { createBillingPortalSession } from '../services/billing.ts';
-import { listPublicCatalogue, STORE_CURRENCIES, type StoreOffer } from '../services/catalogue.ts';
+import { storefront } from './storefront.tsx';
 import { createCheckout, getCheckoutStatus } from '../services/checkout.ts';
 import { addMember, listCustomerEntitlements, removeMember } from '../services/customers.ts';
 import { consumeLoginLink, logout, requestLogin } from '../services/human-auth.ts';
@@ -145,8 +144,8 @@ portalUi.get('/', async (c) => {
         {ents.length === 0 ? <p class="muted">No licences yet.</p> : null}
         {ents.map((e) => (
           <div class="card">
-            <h3>{e.product_name} {e.major_version} — {e.edition_name} <Badge v={e.status} /></h3>
-            <p>Licence <code>{e.license_id}</code> · {e.term_type === 'perpetual' ? 'perpetual (all ' + e.major_version + '.x releases)' : `${e.term_type}, valid until ${fmt(e.expires_at)}`}
+            <h3>{e.product_name} — {e.edition_name} <Badge v={e.status} /></h3>
+            <p>Licence <code>{e.license_id}</code> · Version {e.major_version} · {e.term_type === 'perpetual' ? 'perpetual (all ' + e.major_version + '.x releases)' : `${e.term_type}, valid until ${fmt(e.expires_at)}`}
               {e.expires_at && new Date(e.expires_at) < new Date() ? <> <Badge v="expired" /></> : null}</p>
             {e.status === 'revoked' ? <p class="muted">This licence was revoked. Contact support if you think this is a mistake.</p> : (
               <p><a class="button" href={`/portal/licenses/${e.license_id}/file`}>Download licence file</a>
@@ -255,75 +254,7 @@ storeUi.use('*', csrfGuard('customer'));
 const pub = (c: Ctx, title: string, body: Child, flash?: { kind: 'ok' | 'err'; text: string } | null, status = 200) =>
   c.html(<Layout title={title} realm="public" flash={flash ?? null}>{body}</Layout>, status as 200);
 
-/** Default store currency from the visitor's country (Cloudflare geolocation); AUD otherwise. */
-const COUNTRY_CURRENCY: Record<string, string> = {
-  AU: 'aud', US: 'usd', GB: 'gbp', CA: 'cad', NZ: 'nzd', SG: 'sgd', HK: 'hkd', JP: 'jpy', CN: 'cny', CH: 'chf', LI: 'chf',
-  AT: 'eur', BE: 'eur', CY: 'eur', DE: 'eur', EE: 'eur', ES: 'eur', FI: 'eur', FR: 'eur', GR: 'eur', HR: 'eur', IE: 'eur', IT: 'eur',
-  LT: 'eur', LU: 'eur', LV: 'eur', MT: 'eur', NL: 'eur', PT: 'eur', SI: 'eur', SK: 'eur',
-};
-
-const interval = (p: { recurringInterval: string | null; recurringIntervalCount: number | null }) =>
-  p.recurringInterval ? ` per ${p.recurringIntervalCount && p.recurringIntervalCount > 1 ? `${p.recurringIntervalCount} ` : ''}${p.recurringInterval}` : '';
-
-/** Price line: "100.00 AUD + GST 10% (10.00 AUD) = 110.00 AUD per year". */
-const PriceLine = (p: StoreOffer['prices'][number]) => {
-  if (p.unitAmount === 0) return <b>Free</b>;
-  if (!p.taxRateBps) return <><b>{money(p.unitAmount, p.currency)}</b>{interval(p)}</>;
-  const tax = Math.round((p.unitAmount * p.taxRateBps) / 10000);
-  return <><b>{money(p.unitAmount + tax, p.currency)}</b> incl. {p.taxLabel}{interval(p)}<br /><span class="muted">{money(p.unitAmount, p.currency)} + {p.taxLabel} {p.taxRateBps / 100}% ({money(tax, p.currency)})</span></>;
-};
-
-storeUi.get('/store', async (c) => {
-  const { sql } = c.get('deps');
-  const items = await listPublicCatalogue(sql, new Date());
-  const available = STORE_CURRENCIES.filter((cur) => items.some((i) => i.prices.some((p) => p.currency === cur)));
-  const geo = COUNTRY_CURRENCY[String((c.req.raw as { cf?: { country?: string } }).cf?.country ?? '')];
-  const asked = (c.req.query('currency') ?? '').toLowerCase();
-  const currency = available.includes(asked as never) ? asked : geo && available.includes(geo as never) ? geo : available[0] ?? 'aud';
-  // Signed in to the portal: buy as that account (email fixed).
-  const session = await loadSession(c, 'customer');
-  const me = session ? (await sql<{ email: string }[]>`SELECT email FROM portal_users WHERE id = ${session.subjectId} AND status = 'active'`)[0]?.email ?? null : null;
-  return c.html(<Layout title="Store" realm="public">
-    <h1>Store</h1>
-    {items.length === 0 ? <p class="muted">Nothing is on sale right now.</p> : (
-      <form method="get" action="/store" class="currency-picker">
-        <label for="currency">Currency</label>
-        <select id="currency" name="currency" data-currency-picker>
-          {available.map((cur) => <option value={cur} selected={cur === currency}>{cur.toUpperCase()}</option>)}
-        </select>
-        <noscript><button type="submit">Show prices</button></noscript>
-      </form>
-    )}
-    <div class="grid">
-      {items.map((i) => {
-        const has = i.prices.some((p) => p.currency === currency);
-        return (
-          <form class="card" method="post" action="/checkout" data-offer>
-            <Csrf token={c.get('csrf')} />
-            <h2>{i.name}</h2><p class="muted">{i.products}</p><p>{i.description}</p>
-            {i.prices.map((p) => <p data-price={p.currency} hidden={p.currency !== currency}><PriceLine {...p} /></p>)}
-            <p class="muted" data-price-missing hidden={has}>Not available in this currency.</p>
-            <input type="hidden" name="sku" value={i.sku} /><input type="hidden" name="currency" value={currency} data-currency-field />
-            <input type="hidden" name="idempotencyKey" value={newId('req').replace('req_', 'ck_')} />
-            <label for={`q-${i.sku}`}>Quantity</label><input id={`q-${i.sku}`} name="quantity" type="number" min="1" value="1" />
-            <label for={`e-${i.sku}`}>Email</label>
-            {me ? <input id={`e-${i.sku}`} name="email" type="email" value={me} readonly /> : <input id={`e-${i.sku}`} name="email" type="email" required autocomplete="email" />}
-            <label for={`n-${i.sku}`}>Your name</label><input id={`n-${i.sku}`} name="name" required maxlength={200} autocomplete="name" />
-            {i.needsOrganisation ? (
-              <>
-                <label for={`b-${i.sku}`}>Business name</label><input id={`b-${i.sku}`} name="businessName" required maxlength={200} autocomplete="organization" />
-                <label for={`c-${i.sku}`}>Country (two-letter code, e.g. AU)</label><input id={`c-${i.sku}`} name="country" required pattern="[A-Za-z]{2}" maxlength={2} autocomplete="country" />
-                <label for={`i-${i.sku}`}>Business identifier (optional, e.g. ABN, VAT or EIN)</label><input id={`i-${i.sku}`} name="businessIdentifier" maxlength={64} />
-              </>
-            ) : null}
-            <button type="submit" disabled={!has} data-buy>{i.prices.every((p) => p.unitAmount === 0) ? 'Register' : 'Buy'}</button>
-          </form>
-        );
-      })}
-    </div>
-    <p class="muted">Payment is processed by Stripe. Promotion codes can be entered at checkout. {me ? <>Buying as {me}.</> : <>Already a customer? Use the same email address and the purchase is added to your account.</>}</p>
-  </Layout>);
-});
+storeUi.route('/', storefront);
 
 storeUi.post('/checkout', async (c) => {
   const f = await formData(c);
