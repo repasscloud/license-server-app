@@ -44,8 +44,8 @@ export const Layout: FC<{ title: string; realm: 'admin' | 'customer' | 'public';
 export const Csrf: FC<{ token: string }> = ({ token }) => <input type="hidden" name="_csrf" value={token} />;
 
 export const Badge: FC<{ v: string }> = ({ v }) => {
-  const ok = ['active', 'synced', 'published', 'completed', 'processed', 'sent', 'delivered', 'done', 'shipped', 'success'];
-  const bad = ['revoked', 'failed', 'dead', 'compromised', 'drifted', 'disabled', 'denied', 'failure', 'bounced', 'expired'];
+  const ok = ['active', 'synced', 'published', 'completed', 'processed', 'sent', 'delivered', 'done', 'shipped', 'success', 'applied', 'created'];
+  const bad = ['revoked', 'failed', 'dead', 'compromised', 'drifted', 'disabled', 'denied', 'failure', 'bounced', 'expired', 'error'];
   return <span class={`badge ${ok.includes(v) ? 'ok' : bad.includes(v) ? 'bad' : 'warn'}`}>{v}</span>;
 };
 

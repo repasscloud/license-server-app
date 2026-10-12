@@ -13,7 +13,7 @@ Everything here is **data**, created through the admin portal or the admin API, 
 | Edition policy | How an edition behaves for *this major*: activation model, ownership, transfers, certificate lifetime, offline policy | Business: device seats, organisation, 3 transfers/365 days |
 | Offer (SKU) | What is sold: single or bundle, billing one-time / recurring / free, availability, quantity rules, tax flags | `cd2-business-annual` |
 | Component | One entitlement per component: term (perpetual / subscription / fixed term), seats per unit, quantity scaling, trial, grace, refund and dispute actions | Business subscription, 1 seat per unit, quantity scales seats |
-| Price version | Immutable amount (minor units), currency, interval and tax behaviour, mapped to an immutable Stripe Price | AUD 4900 / year, exclusive |
+| Price version | Immutable amount (minor units), currency, interval and tax behaviour; database only (sent inline at Checkout) | AUD 4900 / year, exclusive |
 
 When a purchase is made, the **effective policy** (major + edition policy + component + quantity) is frozen into an append-only snapshot on the entitlement. Later catalogue edits never change existing customers. Support can make explicit, audited amendments.
 
@@ -25,9 +25,13 @@ When a purchase is made, the **effective policy** (major + edition policy + comp
 4. **Edition policies:** add the editions this major offers. Combinations the protocol cannot express are rejected with an explanation.
 5. **Signing keys:** record that the release trusts the published keys, then mark them **eligible** (see [runbooks/signing-keys.md](runbooks/signing-keys.md)). Issuance fails closed until this is done.
 6. **Offer:** create it with its components. It starts as a draft.
-7. **Prices:** on the offer page, **Set prices (all currencies)**, or `POST /offers/{id}/prices`. Every store currency (AUD, USD, EUR, GBP, CAD, NZD, SGD, HKD, JPY, CNY, CHF) needs an amount, in minor units (cents; whole yen for JPY). Prices live only in the database: nothing is created in Stripe, and Checkout sends the amount inline. An offer missing any currency is not shown and cannot be bought. Optional **flat tax** per currency: a rate and label (for example 10 and `GST`), added on top at checkout as a Stripe Tax Rate (not Stripe Tax): 100 + GST 10% = 110.
-8. **Activate the offer.** This is refused unless the protocol combination is valid, the product and major are active, and every store currency has an active price. The offer's Stripe Product is created automatically on the first checkout.
-9. The offer appears in `/store` if it is public, with a currency switcher. Test a purchase in Stripe **test mode**.
+7. **Stripe product:** normally create the product in Stripe first, with the name, description and image Checkout should show (`stripe-catalogue/` with the CSV, or the Stripe dashboard). Then link it on the offer page (**Link Stripe product**), with `PUT /offers/{id-or-sku}/stripe-product {"stripeProductId":"prod_…"}`, or with the CSV import. The server checks that the product exists in this Stripe account (test or live, matching the key) and is active, and that no other offer uses it. It adds only `repass_offer_id`/`repass_sku` metadata and **never renames, re-describes or archives Stripe products**: renaming the offer does not touch Stripe, and **Verify Stripe product** (`POST /stripe/sync`) only re-checks the link. Relinking is audited; checkouts already open keep the product they were opened with. If you skip this step, the server creates the product from the offer at its **first checkout** (once, safely under concurrent purchases and retries) and links it.
+8. **Prices:** on the offer page, **Set prices (all currencies)**, or `POST /offers/{id}/prices`. Every store currency (AUD, USD, EUR, GBP, CAD, NZD, SGD, HKD, JPY, CNY, CHF) needs an amount, in minor units (cents; whole yen for JPY). Prices live only in the database: nothing is created in Stripe, and Checkout sends the amount inline. An offer missing any currency is not shown and cannot be bought. Optional **flat tax** per currency: a rate and label (for example 10 and `GST`), added on top at checkout as a Stripe Tax Rate (not Stripe Tax): 100 + GST 10% = 110.
+9. **Activate the offer.** This is refused unless the protocol combination is valid, the product and major are active, every store currency has an active price, and a linked Stripe product (if any) is verified. Checkout sends the database price inline against the offer's Stripe product.
+
+Steps 1, 2, 4 and 6–9 can be done in bulk from the catalogue CSV (products, majors and editions are created when missing, from explicit columns; releases and signing keys never are): **Products → Import CSV** (upload, preview, confirm), `POST /catalogue/imports`, or `npm run catalogue:import`. Conflicts between the CSV, the database and Stripe are reported per row, never resolved automatically. See [stripe-catalogue/README-LICENSE-SERVER.md](../stripe-catalogue/README-LICENSE-SERVER.md).
+
+10. The offer appears in `/store` if it is public, with a currency switcher. Test a purchase in Stripe **test mode**.
 
 ## How the store sells
 
@@ -39,7 +43,7 @@ When a purchase is made, the **effective policy** (major + edition policy + comp
 - **Invoices:** every successful purchase and every renewal charge gets a numbered **Paid** invoice (seller and ABN, buyer business/name/address/tax ID, lines, discount, tax, total paid, balance due). It is emailed as a PDF and downloadable from the portal (owners, admins and billing members) and the admin customer page. $0 registrations get none.
 - **Billing portal:** "Manage billing" in the customer portal opens Stripe's portal for the customer's single Stripe customer. `STRIPE_CUSTOMER_PORTAL_LOGIN_URL` in `wrangler.jsonc` adds a fallback sign-in link.
 
-Changing a price means creating a new price version and activating it. The old version is archived (in Stripe too) but stays attached to historical purchases and existing subscriptions. Changing what an offer grants means creating a new offer (new SKU) and archiving the old one: components are immutable once the offer exists.
+Changing a price means creating a new price version and activating it (a CSV import creates it as a draft when the offer is on sale). The old version is archived but stays attached to historical purchases and existing subscriptions. Changing what an offer grants means creating a new offer (new SKU) and archiving the old one: components are immutable once the offer exists.
 
 ## Protocol capabilities (what `repass-v1` clients accept)
 

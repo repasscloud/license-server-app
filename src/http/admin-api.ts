@@ -14,6 +14,7 @@ import { audit, listAudit } from '../services/audit.ts';
 import * as admins from '../services/admins.ts';
 import * as billing from '../services/billing.ts';
 import * as catalogue from '../services/catalogue.ts';
+import * as catalogueImport from '../services/catalogue-import.ts';
 import { listCheckouts } from '../services/checkout.ts';
 import * as customers from '../services/customers.ts';
 import * as email from '../services/email.ts';
@@ -132,6 +133,12 @@ adminApi.get('/offers', async (c) => (need(c, 'products:read'), c.json(list(awai
 adminApi.post('/offers', mutation(201, (c, b) => catalogue.createOffer(c.get('deps').sql, actor(c), b)));
 adminApi.get('/offers/:id', async (c) => (need(c, 'products:read'), c.json(await catalogue.getOffer(c.get('deps').sql, c.req.param('id')))));
 adminApi.patch('/offers/:id', mutation(200, (c, b) => catalogue.updateOffer(c.get('deps').sql, actor(c), c.req.param('id')!, b)));
+// CSV import: upload + preview (writes nothing to the catalogue or Stripe), then apply.
+adminApi.post('/catalogue/imports', mutation(201, (c, b) => catalogueImport.previewImport(c.get('deps').sql, c.get('deps').stripe, actor(c), b)));
+adminApi.get('/catalogue/imports', async (c) => (need(c, 'products:read'), c.json(list(await catalogueImport.listImports(c.get('deps').sql, page(c)), c))));
+adminApi.get('/catalogue/imports/:id', async (c) => (need(c, 'products:read'), c.json(await catalogueImport.getImport(c.get('deps').sql, c.req.param('id')))));
+adminApi.post('/catalogue/imports/:id/apply', mutation(200, (c) => catalogueImport.applyImport(c.get('deps').sql, c.get('deps').stripe, actor(c), c.req.param('id')!)));
+adminApi.put('/offers/:id/stripe-product', mutation(200, (c, b) => stripeSync.linkStripeProduct(c.get('deps').sql, c.get('deps').stripe, actor(c), c.req.param('id')!, b)));
 adminApi.post('/offers/:id/status', mutation(200, (c, b) => catalogue.setOfferStatus(c.get('deps').sql, actor(c), c.req.param('id')!, z.enum(['active', 'archived', 'draft']).parse(b.status))));
 adminApi.get('/offers/:id/prices', async (c) => (need(c, 'prices:read'), c.json({ data: await catalogue.listPriceHistory(c.get('deps').sql, c.req.param('id')) })));
 adminApi.post('/prices', mutation(201, (c, b) => catalogue.createPriceVersion(c.get('deps').sql, actor(c), b)));

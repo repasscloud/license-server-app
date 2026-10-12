@@ -28,7 +28,8 @@
     "deploy": "wrangler deploy --env production",
     "types": "wrangler types --include-env=false",
     "keys:import": "node scripts/import-signing-key.ts",
-    "openapi": "node scripts/export-openapi.ts"
+    "openapi": "node scripts/export-openapi.ts",
+    "catalogue:import": "node scripts/import-catalogue.ts"
   },
   "dependencies": {
     "hono": "4.13.13",

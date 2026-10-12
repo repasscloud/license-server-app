@@ -39,7 +39,7 @@ See the ADRs. In short:
 | Area | Tables |
 | --- | --- |
 | Protocol and catalogue | `license_protocols`, `products`, `product_majors`, `product_releases`, `edition_definitions`, `product_edition_policies` |
-| Sellable catalogue | `offers` (single/bundle), `offer_entitlement_components`, `price_versions` (immutable amounts), `stripe_product_mappings`, `stripe_price_mappings` |
+| Sellable catalogue | `offers` (single/bundle), `offer_entitlement_components`, `price_versions` (immutable amounts), `stripe_product_mappings`, `stripe_price_mappings` (unused since prices became database-only), `catalogue_imports` (CSV import previews and results) |
 | Parties | `customers` (individual/organisation), `portal_users`, `customer_members` (owner/admin/billing/member) |
 | Administration | `admin_users` (encrypted TOTP), `roles`, `role_permissions`, `admin_user_roles`, `service_accounts`, `admin_api_tokens` (HMAC digests) |
 | Human auth | `auth_challenges` (hashed one-time links), `auth_sessions` (hashed tokens, realm, MFA state) |
@@ -55,7 +55,7 @@ Invariants live in the database: unique and partial-unique indexes (one live act
 
 ## Key flows
 
-**Purchase.** `/checkout` (sku, currency, quantity, email, idempotency key) → resolve an active, synced DB price → store a checkout with an immutable snapshot of the quantity-adjusted effective policies → Stripe Checkout Session using the *mapped* Stripe Price → redirect. Returning to the success URL only shows status. A verified `checkout.session.completed` webhook is stored in `stripe_events` together with a job. The job re-fetches the session from Stripe, matches it against the snapshot (price, quantity, currency, subtotal), and then, in one transaction, creates the customer, purchase, lines, subscription, entitlements, licences and activation keys, signs the licences, and queues the confirmation email. `purchases.checkout_id UNIQUE` makes this exactly-once.
+**Purchase.** `/checkout` (sku, currency, quantity, email, idempotency key) → resolve an active DB price → store a checkout with an immutable snapshot of the quantity-adjusted effective policies → the offer's Stripe Product (linked, or created once at this first checkout under a row lock) → Stripe Checkout Session with the DB price inline (`price_data`) → redirect. Returning to the success URL only shows status. A verified `checkout.session.completed` webhook is stored in `stripe_events` together with a job. The job re-fetches the session from Stripe, matches it against the snapshot (price, quantity, currency, subtotal), and then, in one transaction, creates the customer, purchase, lines, subscription, entitlements, licences and activation keys, signs the licences, and queues the confirmation email. `purchases.checkout_id UNIQUE` makes this exactly-once.
 
 **Renewal.** A verified `invoice.paid` webhook → upsert `invoices` → `extension_applied_at` guard → `expires_at = max(current, period_end + grace)` (monotonic) → the next `/renew` or portal download re-signs the *same* licence ID.
 

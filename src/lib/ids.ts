@@ -22,7 +22,7 @@ export type IdPrefix =
   | 'cus' | 'usr' | 'adm' | 'svc' | 'tok' | 'chl'
   | 'chk' | 'sub' | 'pur' | 'pul' | 'inv' | 'cin'
   | 'eps' | 'ent' | 'lic' | 'akey' | 'act' | 'kcp'
-  | 'etp' | 'eml' | 'req';
+  | 'etp' | 'eml' | 'req' | 'imp';
 
 export function newId(prefix: IdPrefix): string {
   return `${prefix}_${ulid()}`;

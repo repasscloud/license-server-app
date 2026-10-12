@@ -14,6 +14,9 @@ Start with `README.md`, `docs/architecture.md`, `docs/STATUS.md` and the ADRs in
 - Every mutation goes through a service function that takes an `Actor`, checks permissions and writes `audit_events`. The admin UI and
   the admin API must call the same services. Do not add SQL shortcuts in route handlers.
 - Money is integer minor units. Price versions are immutable (DB trigger). Entitlements carry frozen policy snapshots.
+- Stripe products: linked by `prod_…` (CSV import / admin link) or created once by `ensureStripeProduct` at first checkout;
+  never renamed or archived by the server. The CSV import (`catalogue-import.ts`) reports CSV/DB/Stripe conflicts and never
+  resolves them; keep preview side-effect free and apply going through the catalogue services.
 - Keep `/v1/*` cheap: no zod and no full-app imports on that path (Workers Free 10 ms CPU). Measure with `npm run bench`.
 - `src/` must run under Node's type stripping: no TS parameter properties or enums; imports use `.ts` extensions.
 

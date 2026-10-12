@@ -65,6 +65,10 @@ export class FakeStripe {
   disputes = new Map<string, Record<string, any>>();
   idem = new Map<string, unknown>();
   failures: Array<{ match: RegExp; status: number; times: number }> = [];
+  /** Products Stripe Search has not indexed yet (search is eventually consistent). */
+  searchHidden = new Set<string>();
+  /** Artificial latency per request (ms), to widen race windows in concurrency tests. */
+  delayMs = 0;
 
   readonly webhookSecret: string;
   readonly apiVersion: string;
@@ -98,6 +102,7 @@ export class FakeStripe {
     const body = await readBody(req);
     const params = listify(parseForm(req.method === 'GET' ? u.search.slice(1) : body)) as Record<string, any>;
     const key = (req.headers['idempotency-key'] as string) ?? null;
+    if (this.delayMs) await new Promise((r) => setTimeout(r, this.delayMs));
     this.requests.push({ method: req.method!, path: u.pathname, params, idempotencyKey: key, stripeVersion: (req.headers['stripe-version'] as string) ?? null });
     if (req.headers.authorization !== 'Bearer sk_test_fake') return this.send(res, 401, { error: { type: 'invalid_request_error', message: 'Invalid API Key' } });
     const f = this.failures.find((x) => x.times > 0 && x.match.test(`${req.method} ${u.pathname}`));
@@ -116,16 +121,25 @@ export class FakeStripe {
     let m: RegExpMatchArray | null;
     if (method === 'POST' && path === '/v1/products') {
       const id = sid('prod');
-      const o = { id, object: 'product', name: p.name, active: p.active !== 'false', metadata: p.metadata ?? {} };
+      const o = { id, object: 'product', name: p.name, description: p.description ?? null, active: p.active !== 'false', metadata: p.metadata ?? {} };
       this.products.set(id, o);
       return o;
+    }
+    if (method === 'GET' && path === '/v1/products/search') {
+      // Supports metadata['key']:'value' clauses joined with OR (all this server sends).
+      const clauses = [...String(p.query ?? '').matchAll(/metadata\['([^']+)'\]:'([^']*)'/g)].map((x) => [x[1]!, x[2]!] as const);
+      const data = [...this.products.values()].filter((o) => !this.searchHidden.has(o.id as string)
+        && clauses.some(([k, v]) => (o.metadata as Record<string, string> | undefined)?.[k] === v));
+      return { object: 'search_result', data, has_more: false };
     }
     if (method === 'POST' && (m = path.match(/^\/v1\/products\/([^/]+)$/))) {
       const o = this.products.get(m[1]!);
       if (!o) return null;
-      Object.assign(o, { name: p.name ?? o.name, active: p.active === undefined ? o.active : p.active !== 'false' });
+      Object.assign(o, { name: p.name ?? o.name, description: p.description ?? o.description, active: p.active === undefined ? o.active : p.active !== 'false',
+        metadata: { ...(o.metadata as Record<string, string>), ...(p.metadata ?? {}) } });
       return o;
     }
+    if (method === 'GET' && (m = path.match(/^\/v1\/products\/([^/]+)$/))) return this.products.get(m[1]!) ?? null;
     if (method === 'POST' && path === '/v1/prices') {
       const id = sid('price');
       const o = { id, object: 'price', active: true, currency: p.currency, unit_amount: Number(p.unit_amount), product: p.product, tax_behavior: p.tax_behavior ?? 'unspecified',
@@ -208,6 +222,14 @@ export class FakeStripe {
     if (method === 'POST' && path === '/v1/billing_portal/sessions') return { id: sid('bps'), url: `https://billing.stripe.com/p/session/${p.customer}` };
     if (method === 'GET' && path === '/v1/events') return { object: 'list', data: [] };
     return null;
+  }
+
+  /** A Product the owner created in Stripe (dashboard or catalogue script), with its image. */
+  createProductDirect(name: string, opts: { active?: boolean; description?: string; metadata?: Record<string, string> } = {}): string {
+    const id = sid('prod');
+    this.products.set(id, { id, object: 'product', name, description: opts.description ?? `${name} description`, active: opts.active ?? true,
+      images: [`https://img.example.test/${id}.png`], metadata: { ...(opts.metadata ?? {}) } });
+    return id;
   }
 
   /** A Price the owner created directly in Stripe (optionally multi-currency). */

@@ -18,6 +18,9 @@
       "name": "Catalogue"
     },
     {
+      "name": "Catalogue import"
+    },
+    {
       "name": "Pricing"
     },
     {
@@ -1121,12 +1124,369 @@
         }
       }
     },
+    "/api/admin/v1/catalogue/imports": {
+      "post": {
+        "tags": [
+          "Catalogue import"
+        ],
+        "summary": "Upload the stripe-catalogue CSV and create its import preview. Writes nothing to the catalogue or Stripe: reports per row what would be created, updated, linked, left unchanged, skipped or rejected (conflicts between the CSV, the database and Stripe are rejected with both values). Rows with _ls:import = yes are imported; columns are documented in stripe-catalogue/README-LICENSE-SERVER.md",
+        "description": "Requires scope `products:write prices:write`.",
+        "security": [
+          {
+            "adminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "fileName": "products.csv",
+                "csv": "product_id,name,_meta:sku,_ls:import,_ls:product,_ls:major,_ls:edition,_ls:billing,_ls:price:aud\nprod_…,CurseDelete 2 Enterprise,cd2-enterprise,yes,cursedelete,2,enterprise,one_time,49900\n"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Catalogue import"
+        ],
+        "summary": "Imports, newest first (summary only)",
+        "description": "Requires scope `products:read`.",
+        "security": [
+          {
+            "adminToken": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/admin/v1/catalogue/imports/{id}": {
+      "get": {
+        "tags": [
+          "Catalogue import"
+        ],
+        "summary": "One import: status, preview (plan) and, once applied, the result per row",
+        "description": "Requires scope `products:read`.",
+        "security": [
+          {
+            "adminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/admin/v1/catalogue/imports/{id}/apply": {
+      "post": {
+        "tags": [
+          "Catalogue import"
+        ],
+        "summary": "Apply a previewed import as the calling administrator. The preview is recomputed first; if anything changed since it was reviewed, nothing is applied and 409 is returned with the updated preview stored on the import. Rows with errors are not applied; every other row goes through the audited catalogue services",
+        "description": "Requires scope `products:write prices:write`.",
+        "security": [
+          {
+            "adminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/admin/v1/offers/{id}/stripe-product": {
+      "put": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Link the offer (id or SKU) to an existing Stripe product (name, description and images are managed in Stripe; the server never renames them). The product must exist in this Stripe account, be active, and not be linked to another offer. Offers never linked get a Stripe product created at their first checkout",
+        "description": "Requires scope `products:write`.",
+        "security": [
+          {
+            "adminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "stripeProductId": "prod_…"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/admin/v1/offers/{id}/status": {
       "post": {
         "tags": [
           "Catalogue"
         ],
-        "summary": "Activate/archive an offer (activation requires a synced price)",
+        "summary": "Activate/archive an offer (activation requires a price in every store currency; a linked Stripe product must be verified, and an unlinked offer gets one at its first checkout)",
         "description": "Requires scope `products:write`.",
         "security": [
           {
@@ -1664,7 +2024,7 @@
         "tags": [
           "Stripe"
         ],
-        "summary": "Queue (or with wait:true, run) creation/update of an offer's Stripe product",
+        "summary": "Queue (or with wait:true, run) verification of an offer's linked Stripe product (exists and active; re-applies repass_* metadata; never creates or renames it)",
         "description": "Requires scope `stripe:sync`.",
         "security": [
           {
@@ -1696,7 +2056,7 @@
           }
         },
         "responses": {
-          "200": {
+          "201": {
             "description": "Success",
             "content": {
               "application/json": {
