@@ -1121,6 +1121,83 @@
         }
       }
     },
+    "/api/admin/v1/catalogue/import": {
+      "post": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Import offers from the stripe-catalogue CSV. Only rows with _ls:import = yes are imported; license-server columns use the _ls: prefix (see stripe-catalogue/README-LICENSE-SERVER.md). Each row creates or updates one single-component offer, sets changed prices, links product_id and optionally activates. Dry run unless apply is true; rows are independent and re-running is safe",
+        "description": "Requires scope `products:write prices:write`.",
+        "security": [
+          {
+            "adminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "csv": "product_id,name,_meta:sku,_ls:import,_ls:product,_ls:major,_ls:edition,_ls:billing,_ls:price:aud\nprod_…,CurseDelete 2 Enterprise,cd2-enterprise,yes,cursedelete,2,enterprise,one_time,49900\n",
+                "apply": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/admin/v1/offers/{id}/stripe-product": {
       "put": {
         "tags": [

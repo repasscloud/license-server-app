@@ -65,6 +65,9 @@ rp POST /offers/$OFFER/prices '{"prices":[
   {"currency":"CHF","unitAmount":28900}]}' | jq '.missingCurrencies'
 # Link the Stripe product you created in Stripe (name, description, image). The server never creates one.
 rp PUT /offers/$OFFER/stripe-product '{"stripeProductId":"prod_…"}' | jq '{sku, stripeProductId, stripeProductName}'
+# Or import many offers from the catalogue CSV (only _ls:import = yes rows; dry run unless "apply": true):
+#   npm run catalogue:import -- stripe-catalogue/products.csv [--apply]
+# (see stripe-catalogue/README-LICENSE-SERVER.md)
 rp POST /offers/$OFFER/status '{"status":"active"}' | jq '{sku, status}'
 
 # Issue (grant) an entitlement — the activation key is returned ONCE

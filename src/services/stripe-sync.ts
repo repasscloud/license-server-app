@@ -38,6 +38,20 @@ async function tagProduct(stripe: StripeClient, product: StripeProduct, offer: {
 }
 
 /**
+ * Read-only check that a product can be linked to the offer (null = an offer not created yet):
+ * a well-formed id, not linked to a different offer, existing in this Stripe account and active.
+ */
+export async function checkStripeProductLinkable(db: Db, stripe: StripeClient, offerId: string | null, given: unknown): Promise<StripeProduct> {
+  const productId = typeof given === 'string' ? given.trim() : '';
+  if (!PRODUCT_ID.test(productId)) throw invalid('stripeProductId must be a Stripe product id (prod_…)');
+  const [other] = await db<{ sku: string }[]>`
+    SELECT o.sku FROM stripe_product_mappings m JOIN offers o ON o.id = m.offer_id
+    WHERE m.stripe_product_id = ${productId} AND (${offerId}::text IS NULL OR m.offer_id <> ${offerId})`;
+  if (other) throw conflict(`Stripe product ${productId} is already linked to offer ${other.sku}`);
+  return fetchSellableProduct(stripe, productId);
+}
+
+/**
  * Link an offer to an existing Stripe Product (prod_…). The product must exist in this Stripe
  * account and be active, and belongs to one offer only. Relinking is allowed and audited:
  * checkouts already open keep the product they were created with.
@@ -45,16 +59,12 @@ async function tagProduct(stripe: StripeClient, product: StripeProduct, offer: {
 export async function linkStripeProduct(sql: Sql, stripe: StripeClient, actor: Actor, offerIdOrSku: string, raw: unknown) {
   requirePermission(actor, 'products:write');
   const given = typeof raw === 'object' && raw !== null ? (raw as { stripeProductId?: unknown }).stripeProductId : undefined;
-  const productId = typeof given === 'string' ? given.trim() : '';
-  if (!PRODUCT_ID.test(productId)) throw invalid('stripeProductId must be a Stripe product id (prod_…)');
   const [o] = await sql<{ id: string; sku: string; stripe_product_id: string | null }[]>`
     SELECT o.id, o.sku, m.stripe_product_id FROM offers o JOIN stripe_product_mappings m ON m.offer_id = o.id
     WHERE o.id = ${offerIdOrSku} OR o.sku = ${offerIdOrSku}`;
   if (!o) throw notFound('Offer');
-  const [other] = await sql<{ sku: string }[]>`
-    SELECT o.sku FROM stripe_product_mappings m JOIN offers o ON o.id = m.offer_id WHERE m.stripe_product_id = ${productId} AND m.offer_id <> ${o.id}`;
-  if (other) throw conflict(`Stripe product ${productId} is already linked to offer ${other.sku}`);
-  const product = await fetchSellableProduct(stripe, productId);
+  const product = await checkStripeProductLinkable(sql, stripe, o.id, given);
+  const productId = product.id;
   await tagProduct(stripe, product, o);
   await sql`UPDATE stripe_product_mappings SET stripe_product_id = ${productId}, sync_state = 'synced', synced_name = ${product.name}, last_error = NULL,
             attempts = attempts + 1, last_synced_at = now(), last_checked_at = now(), updated_at = now() WHERE offer_id = ${o.id}`

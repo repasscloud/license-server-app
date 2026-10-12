@@ -13,6 +13,7 @@ import { listAudit } from '../services/audit.ts';
 import * as admins from '../services/admins.ts';
 import * as billing from '../services/billing.ts';
 import * as catalogue from '../services/catalogue.ts';
+import { importCatalogue, type ImportResult } from '../services/catalogue-import.ts';
 import { getInvoice, invoiceNumber, listInvoices, renderInvoicePdf } from '../services/invoices.ts';
 import { listCheckouts } from '../services/checkout.ts';
 import * as customers from '../services/customers.ts';
@@ -421,6 +422,7 @@ adminUi.get('/offers', async (c) => {
     body: (
       <>
         <h1>Offers (SKUs)</h1>
+        {can(c, 'products:write') && can(c, 'prices:write') ? <p><a href="/admin/catalogue/import">Import offers from the catalogue CSV</a></p> : null}
         <div class="table-wrap"><table><thead><tr><th>SKU</th><th>Name</th><th>Kind</th><th>Billing</th><th>Status</th><th>Components</th><th>Active prices</th></tr></thead><tbody>
           {rows.map((o) => <tr><td><a href={`/admin/offers/${o.id}`}><code>{o.sku}</code></a></td><td>{o.name}</td><td>{o.kind}</td><td>{o.billing}</td><td><Badge v={o.status} /></td><td>{o.components}</td><td>{o.active_prices}</td></tr>)}
         </tbody></table></div>
@@ -524,6 +526,66 @@ adminUi.post('/offers/:id/sync', action(async (c) => {
   await stripeSync.syncOffer(c.get('deps').sql, c.get('deps').stripe, c.req.param('id')!, c.get('actor'));
   return back(c, `/admin/offers/${c.req.param('id')}`, 'Stripe product verified');
 }));
+// --- catalogue CSV import (same service as POST /api/admin/v1/catalogue/import) --------------
+const importForm = (c: Ctx, csv = '') => (
+  <form class="card" method="post" action="/admin/catalogue/import" enctype="multipart/form-data"><Csrf token={c.get('csrf')} />
+    <label for="csvfile">CSV file (the stripe-catalogue products.csv)</label><input id="csvfile" name="file" type="file" accept=".csv,text/csv" />
+    <label for="csvtext">…or paste the CSV</label><textarea id="csvtext" name="csv" rows={6}>{csv}</textarea>
+    <button type="submit">Check (dry run)</button>
+  </form>
+);
+
+const importTable = (r: ImportResult) => (
+  <div class="table-wrap"><table><thead><tr><th>Line</th><th>SKU</th><th>Name</th><th>Result</th><th>Changes</th><th>Notes</th></tr></thead><tbody>
+    {r.rows.map((x) => <tr><td>{x.line}</td><td>{x.offerId ? <a href={`/admin/offers/${x.offerId}`}><code>{x.sku}</code></a> : <code>{x.sku}</code>}</td><td>{x.name}</td>
+      <td><Badge v={x.action} /></td><td>{x.changes.join('; ') || '—'}</td><td class="muted">{[x.error, ...x.warnings].filter(Boolean).join('; ')}</td></tr>)}
+  </tbody></table></div>
+);
+
+adminUi.get('/catalogue/import', async (c) => {
+  if (!can(c, 'products:write') || !can(c, 'prices:write')) throw new AppError('forbidden', 'Missing permission products:write / prices:write');
+  return render(c, {
+    title: 'Import offers',
+    body: (
+      <>
+        <h1>Import offers from the catalogue CSV</h1>
+        <p class="muted">Only rows with <code>_ls:import</code> = yes are imported; every other row is skipped. License-server columns use the <code>_ls:</code> prefix
+          (product, major, edition, billing, prices per currency…) and <code>product_id</code> links the Stripe product the Stripe script created.
+          Each row creates or updates one offer, sets changed prices, links the product and, with <code>_ls:activate</code> = yes, activates it.
+          A dry run comes first; nothing changes until you apply. See <code>stripe-catalogue/README-LICENSE-SERVER.md</code>.</p>
+        {importForm(c)}
+      </>
+    ),
+  });
+});
+adminUi.post('/catalogue/import', action(async (c, f) => {
+  const body = await c.req.parseBody();
+  const file = body.file;
+  const csv = file instanceof File && file.size > 0 ? await file.text() : (f.csv ?? '');
+  const apply = f.apply === 'true';
+  const r = await importCatalogue(c.get('deps').sql, c.get('deps').stripe, c.get('actor'), { csv, apply });
+  const summary = `${r.selected} selected, ${r.skipped} skipped · ${r.created} create, ${r.updated} update, ${r.unchanged} unchanged, ${r.errors} error(s)`;
+  return render(c, {
+    title: apply ? 'Import applied' : 'Import check',
+    body: (
+      <>
+        <h1>{apply ? 'Import applied' : 'Import check (dry run: nothing changed yet)'}</h1>
+        <p class={r.errors ? 'flash err' : 'flash ok'} role="status">{summary}</p>
+        {importTable(r)}
+        {!apply && r.selected > 0 ? (
+          <form class="card" method="post" action="/admin/catalogue/import"><Csrf token={c.get('csrf')} />
+            <textarea name="csv" hidden>{csv}</textarea><input type="hidden" name="apply" value="true" />
+            <p class="muted">{r.errors ? 'Rows with errors will fail again; the other rows are applied independently.' : 'Applies exactly the changes listed above.'}</p>
+            <button type="submit">Apply import</button>
+          </form>
+        ) : null}
+        <h2>Import another file</h2>
+        {importForm(c)}
+      </>
+    ),
+  });
+}));
+
 adminUi.post('/offers/:id/stripe-product', action(async (c, f) => {
   const r = await stripeSync.linkStripeProduct(c.get('deps').sql, c.get('deps').stripe, c.get('actor'), c.req.param('id')!, { stripeProductId: f.stripeProductId });
   return back(c, `/admin/offers/${r.offerId}`, `Linked Stripe product ${r.stripeProductId} (${r.stripeProductName})`);

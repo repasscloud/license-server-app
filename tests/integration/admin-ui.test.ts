@@ -98,6 +98,29 @@ describe('admin pages are functional', () => {
     expect(a).toEqual({ actor_type: 'admin', actor_id: 'adm_root' });
   });
 
+  it('imports the catalogue CSV from an uploaded file: dry run first, then apply', async () => {
+    const page = await (await ui.request('/admin/catalogue/import')).text();
+    expect(page).toMatch(/<h1>Import offers from the catalogue CSV<\/h1>/);
+    expect(page).toContain('enctype="multipart/form-data"');
+    const csv = '﻿product_id,name,_meta:sku,_ls:import,_ls:product,_ls:major,_ls:edition,_ls:billing,_ls:price:aud\n'
+      + 'prod_Book1,"AI for Normal People — PDF",ai-pdf,,,,,,\n'
+      + 'prod_UiApp1,UI App Enterprise,uiapp1-ent,yes,uiapp,1,enterprise,one_time,1000\n';
+    const form = new FormData();
+    form.set('_csrf', await ui.csrfFrom('/admin/catalogue/import'));
+    form.set('file', new File([csv], 'products.csv', { type: 'text/csv' }));
+    form.set('csv', '');
+    const r = await ui.request('/admin/catalogue/import', { method: 'POST', body: form, headers: { origin: 'http://localhost:8787' } });
+    const html = await r.text();
+    expect(html).toMatch(/Import check \(dry run: nothing changed yet\)/);
+    expect(html).toMatch(/1 selected, 1 skipped/);
+    // The product exists but has no major/edition yet: the row explains what to create first.
+    expect(html).toMatch(/No active enterprise edition policy for uiapp v1: create the product, major and edition policy first/);
+    expect(html).toContain('Apply import');
+    const applied = await ui.request('/admin/catalogue/import', { method: 'POST', form: { _csrf: await ui.csrfFrom('/admin/catalogue/import'), csv, apply: 'true' } });
+    expect(await applied.text()).toMatch(/<h1>Import applied<\/h1>/);
+    expect((await sql`SELECT 1 FROM audit_events WHERE action = 'catalogue.imported'`).length).toBe(1);
+  });
+
   it('high-risk actions require a recent TOTP step-up', async () => {
     await sql`UPDATE auth_sessions SET mfa_at = now() - interval '1 hour' WHERE realm = 'admin'`;
     const csrf = await ui.csrfFrom('/admin/keys');

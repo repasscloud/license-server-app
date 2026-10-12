@@ -28,6 +28,10 @@ When a purchase is made, the **effective policy** (major + edition policy + comp
 7. **Stripe product:** create the product in Stripe yourself, with the name, description and image Checkout should show (the Stripe dashboard, or `stripe-catalogue/` with a CSV). Then link it on the offer page (**Link Stripe product**) or with `PUT /offers/{id-or-sku}/stripe-product {"stripeProductId":"prod_…"}`. The server checks that the product exists in this Stripe account (test or live, matching the key) and is active, and that no other offer uses it. It adds only `repass_offer_id`/`repass_sku` metadata. It **never creates, renames or archives Stripe products**: renaming the offer does not touch Stripe, and **Verify Stripe product** (`POST /stripe/sync`) only re-checks the link. Relinking is audited; checkouts already open keep the product they were opened with.
 8. **Prices:** on the offer page, **Set prices (all currencies)**, or `POST /offers/{id}/prices`. Every store currency (AUD, USD, EUR, GBP, CAD, NZD, SGD, HKD, JPY, CNY, CHF) needs an amount, in minor units (cents; whole yen for JPY). Prices live only in the database: nothing is created in Stripe, and Checkout sends the amount inline. An offer missing any currency is not shown and cannot be bought. Optional **flat tax** per currency: a rate and label (for example 10 and `GST`), added on top at checkout as a Stripe Tax Rate (not Stripe Tax): 100 + GST 10% = 110.
 9. **Activate the offer.** This is refused unless the protocol combination is valid, the product and major are active, every store currency has an active price, and a verified Stripe product is linked. Checkout sends the database price inline against that product ID.
+Steps 6–9 can be done in bulk from the catalogue CSV: rows marked `_ls:import = yes` are imported through
+**Offers → Import offers from the catalogue CSV**, `POST /catalogue/import`, or `npm run catalogue:import` (dry run first).
+See [stripe-catalogue/README-LICENSE-SERVER.md](../stripe-catalogue/README-LICENSE-SERVER.md).
+
 10. The offer appears in `/store` if it is public, with a currency switcher. Test a purchase in Stripe **test mode**.
 
 ## How the store sells
