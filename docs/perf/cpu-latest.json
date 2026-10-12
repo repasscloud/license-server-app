@@ -1,85 +1,85 @@
 {
   "sign.Ed25519": {
     "n": 100,
-    "p50": 0.043,
-    "p95": 0.095,
-    "max": 0.158
+    "p50": 0.079,
+    "p95": 0.164,
+    "max": 0.227
   },
   "sign.ECDSA-P256-SHA256": {
     "n": 100,
-    "p50": 0.034,
-    "p95": 0.102,
-    "max": 0.279
+    "p50": 0.069,
+    "p95": 0.166,
+    "max": 0.452
   },
   "sign.ML-DSA-65": {
     "n": 100,
-    "p50": 0.466,
-    "p95": 1.19,
-    "max": 1.993
+    "p50": 0.627,
+    "p95": 1.749,
+    "max": 2.126
   },
   "aes-gcm.unwrap-signing-key": {
     "n": 100,
-    "p50": 0.019,
-    "p95": 0.081,
-    "max": 0.112
+    "p50": 0.041,
+    "p95": 0.157,
+    "max": 0.255
   },
   "http.v1.activate.business.new-device": {
-    "firstCallInIsolate": 20.479,
+    "firstCallInIsolate": 32.807,
     "warm": {
       "n": 40,
-      "p50": 0.918,
-      "p95": 4.461,
-      "max": 5.558
+      "p50": 1.898,
+      "p95": 7.935,
+      "max": 10.466
     }
   },
   "http.v1.activate.enterprise.provision": {
-    "firstCallInIsolate": 0.588,
+    "firstCallInIsolate": 1.328,
     "warm": {
       "n": 40,
-      "p50": 0.629,
-      "p95": 1.69,
-      "max": 4.56
+      "p50": 1.443,
+      "p95": 2.821,
+      "max": 8.189
     }
   },
   "http.v1.renew.licence-only": {
-    "firstCallInIsolate": 3.31,
+    "firstCallInIsolate": 4.857,
     "warm": {
       "n": 40,
-      "p50": 1.227,
-      "p95": 3.752,
-      "max": 24.925
+      "p50": 3.096,
+      "p95": 6.252,
+      "max": 12.217
     }
   },
   "http.admin-api.get-products": {
-    "firstCallInIsolate": 25.177,
+    "firstCallInIsolate": 44.722,
     "warm": {
       "n": 40,
-      "p50": 0.972,
-      "p95": 1.968,
-      "max": 6.195
+      "p50": 2.58,
+      "p95": 3.899,
+      "max": 14.91
     }
   },
   "http.portal.login-page": {
-    "firstCallInIsolate": 1.716,
+    "firstCallInIsolate": 3.662,
     "warm": {
       "n": 40,
-      "p50": 0.308,
-      "p95": 0.943,
-      "max": 1.317
+      "p50": 0.69,
+      "p95": 2.017,
+      "max": 2.026
     }
   },
   "http.store.page": {
-    "firstCallInIsolate": 1.585,
+    "firstCallInIsolate": 12.413,
     "warm": {
       "n": 20,
-      "p50": 0.647,
-      "p95": 8.18,
-      "max": 8.18
+      "p50": 1.858,
+      "p95": 4.116,
+      "max": 4.116
     }
   },
   "environment": {
     "node": "v26.11.0",
     "cpu": "Apple M2 Pro",
-    "date": "2026-10-11T15:09:38.468Z"
+    "date": "2026-10-12T06:27:55.460Z"
   }
 }
