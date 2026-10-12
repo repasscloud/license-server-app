@@ -1,21 +1,36 @@
-**/bin/
-**/obj/
-artifacts/
-server-data/
-keys/*.private.pem
-licenses/*.license
+node_modules/
+dist/
+.wrangler/
+coverage/
+*.log
+.DS_Store
+# Local secrets — never commit. Copy .dev.vars.example to .dev.vars.
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
 .env
 .env.*
 !.env.example
-!.env.prod.example
-*.pfx
-*.p12
-*.key
-data-protection-keys/
-postgres-data/
-TestResults/
-coverage/
-.superpowers/
-dist/
+# Legacy local artefacts (pre-rewrite); kept ignored so they are never committed.
+keys/
+artifacts/
 temp/
+input/
+server-data/
+postgres-data/
+.superpowers/
+**/bin/
+**/obj/
+# Local test database cluster
+.pgtest/
+# Signing/test outputs
+*.license
+!tests/fixtures/**/*.license
+*.pem
+*.key
+*.p12
+*.pfx
+# Legacy local scratch script (pre-rewrite), intentionally untracked
 scripts/test-publish.sh
+worker-configuration.d.ts
+x*.txt

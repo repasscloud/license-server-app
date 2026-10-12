@@ -1,6 +1,0 @@
-@page "/audit"
-@attribute [Authorize(Policy = Permissions.AuditRead)]
-@inject AdminDataService Data
-<PageTitle>Audit trail</PageTitle><div class="page-heading"><div><p class="eyebrow">Immutable history</p><h1>Audit trail</h1><p>Security-sensitive licensing changes, recorded in UTC.</p></div></div>
-@if (items is not null) { <div class="table-wrap"><table><thead><tr><th>UTC timestamp</th><th>Actor</th><th>Action</th><th>Target</th><th>Result</th><th>Context</th></tr></thead><tbody>@foreach (var item in items) { <tr><td>@item.TimestampUtc.ToString("u")</td><td>@item.Actor</td><td><strong>@item.Action</strong></td><td>@item.TargetType / @item.TargetId</td><td><span class="status @item.Result">@item.Result</span></td><td><code class="context">@SafeContext(item.ContextJson)</code></td></tr> }</tbody></table></div> }
-@code { private List<AuditView>? items; protected override async Task OnInitializedAsync() => items = await Data.GetAuditAsync(); private static string SafeContext(string value) => value.Length > 180 ? value[..180] + "…" : value; }

@@ -1,0 +1,128 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	// Local development / CI defaults. Production and staging are explicit environments below.
+	"name": "repass-license-server-dev",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-01",
+	// nodejs_compat: required by postgres.js (TCP sockets via Hyperdrive).
+	// webcrypto_modern_algorithms: native ML-DSA-65 in Web Crypto (opt-in since 2026-09-28).
+	"compatibility_flags": [
+		"nodejs_compat",
+		"webcrypto_modern_algorithms"
+	],
+	// Never expose *.workers.dev or per-version preview URLs. Disabling workers_dev alone does
+	// not disable preview URLs, so both are set explicitly in every environment.
+	"workers_dev": false,
+	"preview_urls": false,
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1
+	},
+	"hyperdrive": [
+		{
+			"binding": "HYPERDRIVE",
+			// Placeholder for local dev only. `wrangler dev` uses
+			// CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE (see .dev.vars.example).
+			"id": "c3697e7a784e4080a48691428cbaf43a"
+		}
+	],
+	"triggers": {
+		"crons": [
+			"*/2 * * * *",
+			"17 3 * * *"
+		]
+	},
+	"vars": {
+		"ENVIRONMENT": "development",
+		"PUBLIC_BASE_URL": "http://localhost:8787",
+		"MAIL_FROM_EMAIL": "licensing@example.invalid",
+		"MAIL_FROM_NAME": "RePassCloud Licensing (dev)",
+		"SUPPORT_EMAIL": "support@example.invalid",
+		"STRIPE_API_VERSION": "2026-09-30.endive",
+		"SIGNING_KEK_ACTIVE_VERSION": "1",
+		"APP_DATA_KEY_ACTIVE_VERSION": "1",
+		"MAIL_TRANSPORT": "capture"
+	},
+	"env": {
+		"staging": {
+			"name": "repass-license-server-staging",
+			"workers_dev": false,
+			"preview_urls": false,
+			"routes": [
+				{
+					"pattern": "license-server-staging.repasscloud.com",
+					"custom_domain": true
+				}
+			],
+			"hyperdrive": [
+				{
+					"binding": "HYPERDRIVE",
+					"id": "REPLACE_WITH_STAGING_HYPERDRIVE_ID"
+				}
+			],
+			"triggers": {
+				"crons": [
+					"*/2 * * * *",
+					"17 3 * * *"
+				]
+			},
+			"vars": {
+				"ENVIRONMENT": "staging",
+				"PUBLIC_BASE_URL": "https://license-server-staging.repasscloud.com",
+				"MAIL_FROM_EMAIL": "hello@repasscloud.com",
+				"MAIL_FROM_NAME": "RePassCloud Licensing (staging)",
+				"SUPPORT_EMAIL": "hello@repasscloud.com",
+				"STRIPE_API_VERSION": "2026-09-30.endive",
+				"SIGNING_KEK_ACTIVE_VERSION": "1",
+				"APP_DATA_KEY_ACTIVE_VERSION": "1",
+				"MAIL_TRANSPORT": "mailersend",
+				// Seller details on the paid invoices the server issues.
+				"INVOICE_SELLER_NAME": "RePass Cloud Pty Ltd",
+				"INVOICE_SELLER_ABN": "74642243801",
+				"INVOICE_NUMBER_PREFIX": "RPL",
+				// Optional fallback link shown in the portal. Test-mode link until you switch Stripe to live.
+				"STRIPE_CUSTOMER_PORTAL_LOGIN_URL": "https://billing.stripe.com/p/login/test_7sYfZjarp60x3ui17p14400"
+			}
+		},
+		"production": {
+			"name": "repass-license-server",
+			"workers_dev": false,
+			"preview_urls": false,
+			"routes": [
+				{
+					"pattern": "license-server.repasscloud.com",
+					"custom_domain": true
+				}
+			],
+			"hyperdrive": [
+				{
+					"binding": "HYPERDRIVE",
+					"id": "c3697e7a784e4080a48691428cbaf43a"
+				}
+			],
+			"triggers": {
+				"crons": [
+					"*/2 * * * *",
+					"17 3 * * *"
+				]
+			},
+			"vars": {
+				"ENVIRONMENT": "production",
+				"PUBLIC_BASE_URL": "https://license-server.repasscloud.com",
+				"MAIL_FROM_EMAIL": "hello@repasscloud.com",
+				"MAIL_FROM_NAME": "RePassCloud Licensing",
+				"SUPPORT_EMAIL": "hello@repasscloud.com",
+				"STRIPE_API_VERSION": "2026-09-30.endive",
+				"SIGNING_KEK_ACTIVE_VERSION": "1",
+				"APP_DATA_KEY_ACTIVE_VERSION": "1",
+				"MAIL_TRANSPORT": "mailersend",
+				// Seller details on the paid invoices the server issues.
+				"INVOICE_SELLER_NAME": "RePass Cloud Pty Ltd",
+				"INVOICE_SELLER_ABN": "74642243801",
+				"INVOICE_NUMBER_PREFIX": "RPL",
+				// Optional fallback link shown in the portal. Test-mode link until you switch Stripe to live.
+				"STRIPE_CUSTOMER_PORTAL_LOGIN_URL": "https://billing.stripe.com/p/login/test_7sYfZjarp60x3ui17p14400"
+			}
+		}
+	}
+}

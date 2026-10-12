@@ -1,264 +1,88 @@
-name: .NET CI
+name: CI
 
 on:
   push:
-    branches: [dev]
+    branches: [main, dev, 'rewrite/**']
   pull_request:
-    branches: [uat, dev]
-  merge_group:
   workflow_dispatch:
 
-# A superseded push or PR run should not consume runner time.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# Keep the automatic token read-only. This workflow only checks out source.
+# Read-only token. CI never deploys and never touches production.
 permissions:
   contents: read
 
 env:
-  DOTNET_CLI_TELEMETRY_OPTOUT: true
-  DOTNET_NOLOGO: true
-  NUGET_XMLDOC_MODE: skip
-  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
-  SOLUTION: SoftwareLicensing.slnx
-  CONFIGURATION: Release
-
-defaults:
-  run:
-    shell: pwsh
+  CURSEDELETE_COMMIT: 3ce95266d8452926e9157dc68f51b2b3e95a46e7  # conformance checker version verified in docs/STATUS.md
 
 jobs:
-  build:
-    name: Build and publish
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up .NET from global.json
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          global-json-file: global.json
-          cache: true
-          cache-dependency-path: '**/packages.lock.json'
-
-      - name: Restore locked dependencies
-        run: dotnet restore $env:SOLUTION --configfile NuGet.Config --locked-mode
-
-      - name: Build solution
-        run: dotnet build $env:SOLUTION --configuration $env:CONFIGURATION --no-restore
-
-      - name: Publish LicenseServer
-        run: >-
-          dotnet publish src/LicenseServer/LicenseServer.csproj
-          --configuration $env:CONFIGURATION
-          --no-build
-          --no-restore
-          --output artifacts/publish
-          -p:UseAppHost=false
-
-      - name: Upload published server
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: license-server-${{ github.sha }}
-          path: artifacts/publish
-          if-no-files-found: error
-          retention-days: 14
-
-  test:
-    name: Test / ${{ matrix.name }}
-    # Repository secrets are deliberately unavailable to pull requests from forks.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+  verify:
+    name: Lint, typecheck, test, package
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Licence signing and validation
-            script: Test-LicenseFlow.ps1
-            test_filter: ''
-            needs_secondary_key: true
-          - name: Database and authentication
-            script: Test-DatabaseAndAuth.ps1
-            # Exclude, don't allowlist: Phase0Roadmap is an intentional-red executable
-            # specification, but every other suite (Baseline, SigningKeyRing, and any test
-            # with no Suite trait at all) is meant to pass and must run. An allowlist here
-            # previously matched only Suite=Baseline (4 of 152 tests) and silently skipped
-            # everything else, including the entire signing-key-ring suite.
-            test_filter: Suite!=Phase0Roadmap
-            needs_secondary_key: false
-          - name: Activation, transfer, and revocation
-            script: Test-ActivationFlow.ps1
-            test_filter: ''
-            needs_secondary_key: false
-
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: ci_only_password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://postgres:ci_only_password@127.0.0.1:5432/postgres
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Set up .NET from global.json
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v5 # TODO(owner): pin to a commit SHA per supply-chain policy
         with:
-          global-json-file: global.json
-          cache: true
-          cache-dependency-path: '**/packages.lock.json'
+          node-version: '24'
+          cache: npm
 
-      - name: Restore locked dependencies
-        run: dotnet restore $env:SOLUTION --configfile NuGet.Config --locked-mode
-
-      - name: Materialize ephemeral test signing keys
-        env:
-          PRIMARY_PRIVATE_KEY: ${{ secrets.LICENSE_PRIMARY_2026_PRIVATE_PEM }}
-          SECONDARY_PRIVATE_KEY: ${{ secrets.LICENSE_SECONDARY_2026_PRIVATE_PEM }}
+      - name: Install PostgreSQL 18 client tools (pg_dump/pg_restore for key portability tests)
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:PRIMARY_PRIVATE_KEY)) {
-            throw 'Repository secret LICENSE_PRIMARY_2026_PRIVATE_PEM is required.'
-          }
-          if ('${{ matrix.needs_secondary_key }}' -eq 'true' -and
-              [string]::IsNullOrWhiteSpace($env:SECONDARY_PRIVATE_KEY)) {
-            throw 'Repository secret LICENSE_SECONDARY_2026_PRIVATE_PEM is required for the licence-flow test.'
-          }
+          sudo apt-get update -y
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-18
 
-          Set-Content `
-            -LiteralPath keys/primary-2026.private.pem `
-            -Value $env:PRIMARY_PRIVATE_KEY.Trim() `
-            -Encoding utf8NoBOM
+      - name: Install dependencies
+        run: npm ci
 
-          if (-not [string]::IsNullOrWhiteSpace($env:SECONDARY_PRIVATE_KEY)) {
-            Set-Content `
-              -LiteralPath keys/secondary-2026.private.pem `
-              -Value $env:SECONDARY_PRIVATE_KEY.Trim() `
-              -Encoding utf8NoBOM
-          }
+      - name: Secret scan
+        run: npm run secrets:scan
 
-      - name: Run ${{ matrix.name }} tests
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck (Worker + Node programs)
+        run: npm run typecheck
+
+      - name: Unit, contract and integration tests (real PostgreSQL)
+        run: npx vitest run --project unit --project integration
+
+      - name: Build CurseDelete conformance checker (pinned)
         run: |
-          New-Item -ItemType Directory -Force -Path artifacts/ci-logs | Out-Null
-          $scriptArguments = @{}
-          $testFilter = '${{ matrix.test_filter }}'
-          if (-not [string]::IsNullOrWhiteSpace($testFilter)) {
-            $scriptArguments.TestFilter = $testFilter
-          }
+          git clone --quiet https://github.com/repasscloud/cursedelete-2 /tmp/cursedelete-2
+          git -C /tmp/cursedelete-2 checkout --quiet "$CURSEDELETE_COMMIT"
+          cargo build --quiet --manifest-path /tmp/cursedelete-2/Cargo.toml -p cursdel-license --example conformance
+          echo "CURSEDELETE_CONFORMANCE_BIN=/tmp/cursedelete-2/target/debug/examples/conformance" >> "$GITHUB_ENV"
 
-          & "./scripts/${{ matrix.script }}" @scriptArguments 2>&1 |
-            Tee-Object -FilePath "artifacts/ci-logs/${{ matrix.script }}.log"
+      - name: Real-client conformance (CurseDelete verifier)
+        run: npx vitest run --project integration tests/integration/conformance.test.ts
 
-          # A successful script can leave LASTEXITCODE non-zero after testing an
-          # expected native-command failure. GitHub's pwsh wrapper exits with that
-          # stale value, so clear it only after the script completes successfully.
-          $global:LASTEXITCODE = 0
+      - name: Workers runtime test (workerd + Hyperdrive local binding)
+        run: npx vitest run --project workers
 
-      - name: Remove ephemeral signing keys
-        if: always()
+      - name: Package Worker (wrangler dry-run)
+        run: npm run build
+
+      - name: OpenAPI document is up to date
         run: |
-          Remove-Item -Force -ErrorAction SilentlyContinue `
-            keys/primary-2026.private.pem, `
-            keys/secondary-2026.private.pem
-
-      - name: Upload test log
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-log-${{ matrix.script }}-${{ github.run_attempt }}
-          path: artifacts/ci-logs
-          if-no-files-found: warn
-          retention-days: 14
-
-  # Only the PowerShell scripts above run in CI, but the bash ports under scripts/*.sh are
-  # what macOS/Linux contributors actually run, and a BSD/GNU 'stat' portability bug in
-  # test-license-flow.sh once reached a PR undetected because of that gap (see PR #29). This
-  # job is deliberately narrow: it covers only test-license-flow.sh, where that platform-
-  # specific assertion lives, rather than duplicating the full three-script matrix in bash.
-  test-bash-license-flow:
-    name: Test / Licence signing and validation (bash)
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up .NET from global.json
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          global-json-file: global.json
-          cache: true
-          cache-dependency-path: '**/packages.lock.json'
-
-      - name: Restore locked dependencies
-        run: dotnet restore "$SOLUTION" --configfile NuGet.Config --locked-mode
-
-      - name: Materialize ephemeral test signing keys
-        env:
-          PRIMARY_PRIVATE_KEY: ${{ secrets.LICENSE_PRIMARY_2026_PRIVATE_PEM }}
-          SECONDARY_PRIVATE_KEY: ${{ secrets.LICENSE_SECONDARY_2026_PRIVATE_PEM }}
-        run: |
-          trim() {
-            local s="$1"
-            s="${s#"${s%%[![:space:]]*}"}"
-            s="${s%"${s##*[![:space:]]}"}"
-            printf '%s' "$s"
-          }
-
-          if [ -z "$(trim "$PRIMARY_PRIVATE_KEY")" ]; then
-            echo 'Repository secret LICENSE_PRIMARY_2026_PRIVATE_PEM is required.' >&2
-            exit 1
-          fi
-          if [ -z "$(trim "$SECONDARY_PRIVATE_KEY")" ]; then
-            echo 'Repository secret LICENSE_SECONDARY_2026_PRIVATE_PEM is required for the licence-flow test.' >&2
-            exit 1
-          fi
-
-          trim "$PRIMARY_PRIVATE_KEY" > keys/primary-2026.private.pem
-          trim "$SECONDARY_PRIVATE_KEY" > keys/secondary-2026.private.pem
-
-      - name: Run bash licence-flow test
-        run: |
-          mkdir -p artifacts/ci-logs
-          ./scripts/test-license-flow.sh 2>&1 | tee artifacts/ci-logs/test-license-flow.sh.log
-
-      - name: Remove ephemeral signing keys
-        if: always()
-        run: rm -f keys/primary-2026.private.pem keys/secondary-2026.private.pem
-
-      - name: Upload test log
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-log-bash-license-flow-${{ github.run_attempt }}
-          path: artifacts/ci-logs
-          if-no-files-found: warn
-          retention-days: 14
-
-  container:
-    name: Build container image
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Build production Docker image
-        env:
-          IMAGE_TAG: license-server:${{ github.sha }}
-        run: |
-          docker build --pull --tag $env:IMAGE_TAG .
-          docker image inspect $env:IMAGE_TAG | Out-Null
+          npm run openapi
+          git diff --exit-code docs/api/openapi.json

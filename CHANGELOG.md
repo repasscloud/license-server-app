@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.1] - 2026-10-11
+
+Complete rewrite. The .NET/Blazor/Docker proof of concept is replaced by a Cloudflare Worker backed by PostgreSQL.
+The legacy code remains in git history (`a8e2602`); its design notes are archived in `docs/archive/legacy-dotnet/`.
+The retired `software-license-v1` format and its test licences are not carried forward.
+
+### Added
+
+- `repass-license-v1` / `repass-activation-v1` issuance (Ed25519, ECDSA-P256-SHA256 P1363, ML-DSA-65 pure, empty context),
+  verified against the official vectors and CurseDelete's conformance checker.
+- Binding machine API: `POST /v1/activations`, `/v1/licenses/{id}/renew`, `/v1/activations/{id}/deactivate`,
+  with transactional seat and transfer enforcement and rate limiting.
+- Data-driven catalogue in PostgreSQL: products, majors, releases, edition policies, offers and bundles, immutable price
+  versions, a protocol registry, and per-purchase policy snapshots.
+- PostgreSQL signing-key registry with AES-256-GCM application encryption, KEK rotation, trust and eligibility, retire and compromise.
+- Stripe: DB-to-Stripe catalogue sync with drift detection, DB-priced Checkout, verified webhook inbox, lifecycle
+  processing (fulfilment, renewals, seat changes, refunds, disputes, cancellation), reconciliation and backfill.
+- MailerSend transactional email via an encrypted durable outbox with retries; optional verified delivery webhooks.
+- Customer portal (passwordless), admin portal (email link + TOTP, step-up), and a scoped admin REST API with
+  PATs and service-account tokens (OpenAPI 3.1).
+- Operator CLIs, runbooks, CI (real PostgreSQL, conformance, workerd) and a manual deploy workflow.
+
+### Removed
+
+- The ASP.NET Core/Blazor server, LicenseGenerator, LicenseValidator, EF Core migrations, Docker/Caddy deployment, PowerShell
+  and shell test scripts, legacy keys and demo data, and the legacy `software-license-v1` format.
+
 ## [0.3.5] - 2026-08-25
 
 ### Added

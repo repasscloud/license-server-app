@@ -1,0 +1,85 @@
+{
+  "sign.Ed25519": {
+    "n": 100,
+    "p50": 0.043,
+    "p95": 0.095,
+    "max": 0.158
+  },
+  "sign.ECDSA-P256-SHA256": {
+    "n": 100,
+    "p50": 0.034,
+    "p95": 0.102,
+    "max": 0.279
+  },
+  "sign.ML-DSA-65": {
+    "n": 100,
+    "p50": 0.466,
+    "p95": 1.19,
+    "max": 1.993
+  },
+  "aes-gcm.unwrap-signing-key": {
+    "n": 100,
+    "p50": 0.019,
+    "p95": 0.081,
+    "max": 0.112
+  },
+  "http.v1.activate.business.new-device": {
+    "firstCallInIsolate": 20.479,
+    "warm": {
+      "n": 40,
+      "p50": 0.918,
+      "p95": 4.461,
+      "max": 5.558
+    }
+  },
+  "http.v1.activate.enterprise.provision": {
+    "firstCallInIsolate": 0.588,
+    "warm": {
+      "n": 40,
+      "p50": 0.629,
+      "p95": 1.69,
+      "max": 4.56
+    }
+  },
+  "http.v1.renew.licence-only": {
+    "firstCallInIsolate": 3.31,
+    "warm": {
+      "n": 40,
+      "p50": 1.227,
+      "p95": 3.752,
+      "max": 24.925
+    }
+  },
+  "http.admin-api.get-products": {
+    "firstCallInIsolate": 25.177,
+    "warm": {
+      "n": 40,
+      "p50": 0.972,
+      "p95": 1.968,
+      "max": 6.195
+    }
+  },
+  "http.portal.login-page": {
+    "firstCallInIsolate": 1.716,
+    "warm": {
+      "n": 40,
+      "p50": 0.308,
+      "p95": 0.943,
+      "max": 1.317
+    }
+  },
+  "http.store.page": {
+    "firstCallInIsolate": 1.585,
+    "warm": {
+      "n": 20,
+      "p50": 0.647,
+      "p95": 8.18,
+      "max": 8.18
+    }
+  },
+  "environment": {
+    "node": "v26.11.0",
+    "cpu": "Apple M2 Pro",
+    "date": "2026-10-11T15:09:38.468Z"
+  }
+}

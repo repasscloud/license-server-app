@@ -1,10 +1,8 @@
 # Contributing
 
-## Bumping Licensing.Core's version
-
-Since you're only bumping `Licensing.Core`'s version manually, about once a year: each time you
-do, remember to also run `dotnet restore SoftwareLicensing.slnx --force-evaluate` (or
-delete+regenerate the lock files) and commit the updated `packages.lock.json` files in the same
-commit — otherwise you'll hit this exact CI failure again: CI restores with `--locked-mode`, and a
-stale lock file still pinned to the old `Licensing.Core` version will fail locked restore before
-the build even starts.
+1. Read `CLAUDE.md` (it applies to humans too), `docs/architecture.md` and the ADRs.
+2. Run `npm run typecheck && npm run lint && npm test` before opening a PR. CI also runs the CurseDelete conformance
+   checker and the workerd runtime test.
+3. Database changes go in new numbered files under `migrations/`; never edit an applied migration.
+4. Changes to the `/v1` wire behaviour require an ADR and a client conformance run.
+5. Update `CHANGELOG.md` under `[Unreleased]`.
