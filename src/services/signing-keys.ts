@@ -338,6 +338,21 @@ export async function rewrapSigningKeys(sql: Sql, kek: Keyring, actor: Actor, to
   }) as Promise<{ rewrapped: string[]; remaining: number }>;
 }
 
+/**
+ * Ids of the keys loadSigners() would sign with right now (same eligibility rules, no secrets).
+ * Used to decide whether a stored envelope may be reused or must be re-signed.
+ */
+export async function usableSigningKeyIds(db: Db, productMajorId: string): Promise<string[]> {
+  const rows = await db<(Pick<CompatRow, 'signing_key_id' | 'key_status' | 'trusted_since_version' | 'trusted_until_version' | 'min_release'>)[]>`
+    SELECT c.signing_key_id, k.status AS key_status, c.trusted_since_version, c.trusted_until_version,
+           (SELECT r.version FROM product_releases r WHERE r.product_major_id = c.product_major_id AND r.is_minimum_supported) AS min_release
+    FROM key_compatibilities c
+    JOIN signing_keys k ON k.id = c.signing_key_id
+    JOIN signing_key_secrets s ON s.signing_key_id = c.signing_key_id
+    WHERE c.product_major_id = ${productMajorId} AND c.eligible`;
+  return rows.filter((r) => eligibilityBlock(r) === null).map((r) => r.signing_key_id);
+}
+
 // Decrypted, non-extractable CryptoKeys cached per isolate to keep per-request CPU low.
 const signerCache = new Map<string, Promise<CryptoKey>>();
 

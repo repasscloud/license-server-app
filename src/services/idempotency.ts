@@ -26,14 +26,17 @@ export async function withIdempotency(
     if (rec.status_code === null) throw new AppError('conflict', 'A request with this Idempotency-Key is still in progress');
     return { status: rec.status_code, body: rec.response_body, replayed: true };
   }
+  let result: { status: number; body: unknown };
   try {
-    const result = await run();
-    await sql`UPDATE idempotency_records SET status_code = ${result.status}, response_body = ${sql.json((result.body ?? null) as never)}
-              WHERE actor_id = ${actorId} AND idempotency_key = ${key}`;
-    return { ...result, replayed: false };
+    result = await run();
   } catch (e) {
     // Failed requests release the key so the client can retry.
     await sql`DELETE FROM idempotency_records WHERE actor_id = ${actorId} AND idempotency_key = ${key} AND status_code IS NULL`;
     throw e;
   }
+  // The mutation has committed. If storing its response fails (or the isolate dies first) the
+  // record stays "in progress" until it expires: retries get a conflict instead of re-running it.
+  await sql`UPDATE idempotency_records SET status_code = ${result.status}, response_body = ${sql.json((result.body ?? null) as never)}
+            WHERE actor_id = ${actorId} AND idempotency_key = ${key}`;
+  return { ...result, replayed: false };
 }

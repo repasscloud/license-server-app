@@ -16,7 +16,7 @@ import { addInterval } from '../lib/time.ts';
 import { requireHighRisk, requirePermission, type Actor } from './actor.ts';
 import { audit } from './audit.ts';
 import { enqueueEmail } from './email.ts';
-import { loadSigners } from './signing-keys.ts';
+import { loadSigners, usableSigningKeyIds } from './signing-keys.ts';
 
 // ---------------------------------------------------------------------------------------------
 // Activation keys: 150-bit Crockford base32, typed as XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX.
@@ -251,11 +251,11 @@ export async function currentOrFreshLicense(tx: Tx, config: Config, ctx: License
 }
 
 async function currentKeysStillEligible(db: Db, ctx: LicenseContext): Promise<boolean> {
+  // Same rules as loadSigners(): a key whose trust interval no longer covers the minimum
+  // supported release forces a re-sign even while its compatibility row is still marked eligible.
   const sigIds = ctx.currentEnvelope!.signatures.map((s) => s.keyId).sort();
-  const rows = await db<{ signing_key_id: string }[]>`
-    SELECT c.signing_key_id FROM key_compatibilities c JOIN signing_keys k ON k.id = c.signing_key_id
-    WHERE c.product_major_id = ${ctx.productMajorId} AND c.eligible AND k.status = 'published' ORDER BY c.signing_key_id`;
-  return rows.map((r) => r.signing_key_id).join(',') === sigIds.join(',');
+  const usable = (await usableSigningKeyIds(db, ctx.productMajorId)).sort();
+  return usable.join(',') === sigIds.join(',');
 }
 
 export async function signActivationCertificate(

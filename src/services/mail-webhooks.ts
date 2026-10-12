@@ -34,23 +34,26 @@ export async function receiveMailerSendWebhook(sql: Sql, config: Config, rawBody
   const messageId = ev.data?.email?.message?.id ?? ev.data?.message_id ?? null;
   const recipient = ev.data?.email?.recipient?.email ?? ev.data?.recipient?.email ?? null;
   const rh = recipient ? await recipientHash(config, recipient) : null;
-  const ins = await sql`INSERT INTO mail_events (id, type, provider_message_id, recipient_hash) VALUES (${id}, ${ev.type}, ${messageId}, ${rh}) ON CONFLICT DO NOTHING RETURNING id`;
-  if (!ins.length) return 'duplicate';
   const actor = { type: 'mailersend' as const, id: null, label: 'mailersend' };
-  switch (ev.type) {
-    case 'activity.delivered':
-      if (messageId) await sql`UPDATE email_outbox SET status = 'delivered', delivered_at = now() WHERE provider_message_id = ${messageId} AND status IN ('sent', 'uncertain')`;
-      return 'delivered';
-    case 'activity.hard_bounced':
-    case 'activity.spam_complaint':
-      if (messageId) await sql`UPDATE email_outbox SET status = 'bounced', last_error = ${ev.type} WHERE provider_message_id = ${messageId}`;
-      if (rh) await sql`INSERT INTO email_suppressions (recipient_hash, reason) VALUES (${rh}, ${ev.type}) ON CONFLICT DO NOTHING`;
-      await audit(sql, actor, { action: 'email.suppressed', resourceType: 'email', resourceId: messageId, detail: { type: ev.type } });
-      return 'suppressed';
-    case 'activity.soft_bounced':
-      if (messageId) await sql`UPDATE email_outbox SET last_error = 'soft bounce reported by provider' WHERE provider_message_id = ${messageId}`;
-      return 'soft bounce noted';
-    default:
-      return 'ignored';
-  }
+  // Dedupe marker and effects commit together, so a failed attempt is retried in full.
+  return sql.begin(async (tx) => {
+    const ins = await tx`INSERT INTO mail_events (id, type, provider_message_id, recipient_hash) VALUES (${id}, ${ev.type}, ${messageId}, ${rh}) ON CONFLICT DO NOTHING RETURNING id`;
+    if (!ins.length) return 'duplicate';
+    switch (ev.type) {
+      case 'activity.delivered':
+        if (messageId) await tx`UPDATE email_outbox SET status = 'delivered', delivered_at = now() WHERE provider_message_id = ${messageId} AND status IN ('sent', 'uncertain')`;
+        return 'delivered';
+      case 'activity.hard_bounced':
+      case 'activity.spam_complaint':
+        if (messageId) await tx`UPDATE email_outbox SET status = 'bounced', last_error = ${ev.type} WHERE provider_message_id = ${messageId}`;
+        if (rh) await tx`INSERT INTO email_suppressions (recipient_hash, reason) VALUES (${rh}, ${ev.type}) ON CONFLICT DO NOTHING`;
+        await audit(tx, actor, { action: 'email.suppressed', resourceType: 'email', resourceId: messageId, detail: { type: ev.type } });
+        return 'suppressed';
+      case 'activity.soft_bounced':
+        if (messageId) await tx`UPDATE email_outbox SET last_error = 'soft bounce reported by provider' WHERE provider_message_id = ${messageId}`;
+        return 'soft bounce noted';
+      default:
+        return 'ignored';
+    }
+  });
 }

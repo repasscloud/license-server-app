@@ -10,7 +10,7 @@
 import { z } from 'zod';
 import type { Config } from '../config.ts';
 import { hmac } from '../crypto/hashing.ts';
-import { toBytes, type Db, type Sql } from '../db/client.ts';
+import { toBytes, type Db, type Sql, type Tx } from '../db/client.ts';
 import { timingSafeEqual } from '../lib/encoding.ts';
 import { conflict, forbidden, invalid, notFound } from '../lib/errors.ts';
 import { newId, randomBytes, ulid } from '../lib/ids.ts';
@@ -212,6 +212,11 @@ export interface CreatedToken {
  * Must be invoked from an MFA-fresh admin session or a token holding tokens:manage.
  */
 export async function createApiToken(sql: Sql, config: Config, actor: Actor, raw: unknown, now = new Date()): Promise<CreatedToken> {
+  return sql.begin((tx) => insertApiToken(tx, config, actor, raw, now, null));
+}
+
+/** Validate and insert inside the caller's transaction. `personalOwnerId` keeps a PAT's owner on rotation. */
+async function insertApiToken(tx: Tx, config: Config, actor: Actor, raw: unknown, now: Date, personalOwnerId: string | null): Promise<CreatedToken> {
   const input = CreateTokenInput.parse(raw);
   const owner = input.serviceAccountId ? { type: 'service_account' as const, id: input.serviceAccountId } : null;
   if (actor.type !== 'admin' && actor.type !== 'api_token') throw forbidden();
@@ -225,32 +230,30 @@ export async function createApiToken(sql: Sql, config: Config, actor: Actor, raw
   const highRisk = scopes.some((s) => HIGH_RISK_SCOPES.has(s));
   if (highRisk && input.expiresInDays > 30) throw invalid('Tokens with high-risk scopes may last at most 30 days');
   for (const c of input.allowedCidrs) if (!isValidCidr(c)) throw invalid(`Invalid CIDR ${c}`);
-  const ownerAdminId = owner ? null : actor.type === 'admin' ? actor.id : (actor.principalId ?? null);
+  const ownerAdminId = owner ? null : personalOwnerId ?? (actor.type === 'admin' ? actor.id : (actor.principalId ?? null));
   if (!owner && (!ownerAdminId || !ownerAdminId.startsWith('adm_'))) throw forbidden('Only administrators own personal tokens');
-  return sql.begin(async (tx) => {
-    if (owner) {
-      const [sa] = await tx<{ allowed_scopes: string[]; status: string }[]>`SELECT allowed_scopes, status FROM service_accounts WHERE id = ${owner.id}`;
-      if (!sa || sa.status !== 'active') throw notFound('Active service account');
-      for (const s of scopes) if (!sa.allowed_scopes.includes(s)) throw forbidden(`Service account is not allowed scope ${s}`);
-    }
-    const id = newId('tok');
-    const lookup = ulid().slice(-16);
-    const secret = base64UrlEncode(randomBytes(32));
-    const token = `rpl_${owner ? 'svc' : 'pat'}_${lookup}_${secret}`;
-    const expiresAt = new Date(now.getTime() + input.expiresInDays * 86_400_000);
-    await tx`INSERT INTO admin_api_tokens (id, lookup_id, secret_hash, name, admin_user_id, service_account_id, scopes, not_before, expires_at, allowed_cidrs, rate_limit_per_minute, created_by)
-             VALUES (${id}, ${lookup}, ${await secretHash(config, secret)}, ${input.name}, ${ownerAdminId}, ${owner?.id ?? null},
-                     (SELECT array_agg(x) FROM jsonb_array_elements_text(${tx.json(scopes as never)}::jsonb) x), ${input.notBefore}, ${expiresAt},
-                     (SELECT coalesce(array_agg(x), '{}') FROM jsonb_array_elements_text(${tx.json(input.allowedCidrs as never)}::jsonb) x),
-                     ${input.rateLimitPerMinute}, ${actor.label})`;
-    await audit(tx, actor, { action: 'api_token.created', resourceType: 'api_token', resourceId: id, detail: { name: input.name, scopes, expiresAt, owner: owner ?? { type: 'admin', id: ownerAdminId }, highRisk } });
-    return { id, token, name: input.name, scopes, expiresAt: expiresAt.toISOString(), owner: owner ?? { type: 'admin' as const, id: ownerAdminId! } };
-  });
+  if (owner) {
+    const [sa] = await tx<{ allowed_scopes: string[]; status: string }[]>`SELECT allowed_scopes, status FROM service_accounts WHERE id = ${owner.id}`;
+    if (!sa || sa.status !== 'active') throw notFound('Active service account');
+    for (const s of scopes) if (!sa.allowed_scopes.includes(s)) throw forbidden(`Service account is not allowed scope ${s}`);
+  }
+  const id = newId('tok');
+  const lookup = ulid().slice(-16);
+  const secret = base64UrlEncode(randomBytes(32));
+  const token = `rpl_${owner ? 'svc' : 'pat'}_${lookup}_${secret}`;
+  const expiresAt = new Date(now.getTime() + input.expiresInDays * 86_400_000);
+  await tx`INSERT INTO admin_api_tokens (id, lookup_id, secret_hash, name, admin_user_id, service_account_id, scopes, not_before, expires_at, allowed_cidrs, rate_limit_per_minute, created_by)
+           VALUES (${id}, ${lookup}, ${await secretHash(config, secret)}, ${input.name}, ${ownerAdminId}, ${owner?.id ?? null},
+                   (SELECT array_agg(x) FROM jsonb_array_elements_text(${tx.json(scopes as never)}::jsonb) x), ${input.notBefore}, ${expiresAt},
+                   (SELECT coalesce(array_agg(x), '{}') FROM jsonb_array_elements_text(${tx.json(input.allowedCidrs as never)}::jsonb) x),
+                   ${input.rateLimitPerMinute}, ${actor.label})`;
+  await audit(tx, actor, { action: 'api_token.created', resourceType: 'api_token', resourceId: id, detail: { name: input.name, scopes, expiresAt, owner: owner ?? { type: 'admin', id: ownerAdminId }, highRisk } });
+  return { id, token, name: input.name, scopes, expiresAt: expiresAt.toISOString(), owner: owner ?? { type: 'admin' as const, id: ownerAdminId! } };
 }
 
-async function loadTokenForManagement(db: Db, actor: Actor, id: string) {
+async function loadTokenForManagement(db: Db, actor: Actor, id: string, forUpdate = false) {
   const [t] = await db<{ id: string; admin_user_id: string | null; service_account_id: string | null; revoked_at: Date | null; name: string; scopes: string[]; allowed_cidrs: string[]; rate_limit_per_minute: number; expires_at: Date; created_at: Date }[]>`
-    SELECT id, admin_user_id, service_account_id, revoked_at, name, scopes, allowed_cidrs, rate_limit_per_minute, expires_at, created_at FROM admin_api_tokens WHERE id = ${id}`;
+    SELECT id, admin_user_id, service_account_id, revoked_at, name, scopes, allowed_cidrs, rate_limit_per_minute, expires_at, created_at FROM admin_api_tokens WHERE id = ${id} ${forUpdate ? db`FOR UPDATE` : db``}`;
   if (!t) throw notFound('Token');
   const selfOwned = t.admin_user_id !== null && (actor.id === t.admin_user_id || actor.principalId === t.admin_user_id);
   if (!selfOwned) requirePermission(actor, 'tokens:manage');
@@ -268,20 +271,20 @@ export async function revokeApiToken(sql: Sql, actor: Actor, id: string, reason:
 }
 
 /** Rotate: new secret with the same settings; the old token is revoked atomically. */
-export async function rotateApiToken(sql: Sql, config: Config, actor: Actor, id: string, opts: { expiresInDays?: number } = {}): Promise<CreatedToken> {
-  const t = await loadTokenForManagement(sql, actor, id);
-  if (t.revoked_at) throw conflict('Token is revoked; create a new one');
-  const lifetime = opts.expiresInDays ?? Math.max(1, Math.round((t.expires_at.getTime() - t.created_at.getTime()) / 86_400_000));
-  const created = await createApiToken(sql, config, actor, {
-    name: t.name, serviceAccountId: t.service_account_id, scopes: t.scopes, expiresInDays: Math.min(lifetime, 365),
-    allowedCidrs: t.allowed_cidrs, rateLimitPerMinute: t.rate_limit_per_minute,
-  });
-  await sql.begin(async (tx) => {
+export async function rotateApiToken(sql: Sql, config: Config, actor: Actor, id: string, opts: { expiresInDays?: number } = {}, now = new Date()): Promise<CreatedToken> {
+  return sql.begin(async (tx) => {
+    const t = await loadTokenForManagement(tx, actor, id, true);
+    if (t.revoked_at) throw conflict('Token is revoked; create a new one');
+    const lifetime = opts.expiresInDays ?? Math.max(1, Math.round((t.expires_at.getTime() - t.created_at.getTime()) / 86_400_000));
+    const created = await insertApiToken(tx, config, actor, {
+      name: t.name, serviceAccountId: t.service_account_id, scopes: t.scopes, expiresInDays: Math.min(lifetime, 365),
+      allowedCidrs: t.allowed_cidrs, rateLimitPerMinute: t.rate_limit_per_minute,
+    }, now, t.admin_user_id);
     await tx`UPDATE admin_api_tokens SET revoked_at = now(), revoked_reason = 'rotated' WHERE id = ${id} AND revoked_at IS NULL`;
     await tx`UPDATE admin_api_tokens SET rotated_from_id = ${id} WHERE id = ${created.id}`;
     await audit(tx, actor, { action: 'api_token.rotated', resourceType: 'api_token', resourceId: id, detail: { newTokenId: created.id } });
+    return created;
   });
-  return created;
 }
 
 export async function listApiTokens(db: Db, actor: Actor) {

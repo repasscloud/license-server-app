@@ -12,7 +12,7 @@ import { makeDeps } from '../../src/http/context.ts';
 import { drainJobs } from '../../src/jobs/runner.ts';
 import { base64UrlDecode, base64UrlEncode, hexDecode } from '../../src/lib/encoding.ts';
 import { dispatchEmails } from '../../src/services/email.ts';
-import { importSigningKey, publishSigningKey } from '../../src/services/signing-keys.ts';
+import { importSigningKey, publishSigningKey, usableSigningKeyIds } from '../../src/services/signing-keys.ts';
 import { freshDatabase } from '../helpers/db.ts';
 import { FakeMailerSend, FakeStripe } from '../helpers/fake-providers.ts';
 import { superActor, testEnv, VECTORS } from '../helpers/fixtures.ts';
@@ -159,6 +159,19 @@ describe('catalogue onboarding through the admin API (no redeploy, data only)', 
     ids.ep_other_ent = (await ok('PUT', `/majors/${m2.id}/edition-policies/enterprise`, { displayName: 'Enterprise', activationModel: 'none', ownership: 'organisation' })).id;
     await ok('PUT', '/signing-keys/vector-ed25519/trust', { productMajorId: m2.id, trustedSinceVersion: '1.0.0' });
     await ok('POST', '/signing-keys/vector-ed25519/eligibility', { productMajorId: m2.id, eligible: true });
+  });
+
+  it('stops reusing envelopes signed by a key the minimum supported release no longer trusts', async () => {
+    const Rollback = new Error('rollback');
+    const major = ids.major!;
+    await sql.begin(async (tx) => {
+      expect((await usableSigningKeyIds(tx, major)).sort()).toEqual(['vector-ed25519', 'vector-mldsa65']);
+      // Compatibility row stays `eligible`, but the trust interval no longer covers the minimum release.
+      await tx`UPDATE key_compatibilities SET trusted_until_version = '2.5.0' WHERE product_major_id = ${major} AND signing_key_id = 'vector-ed25519'`;
+      await tx`UPDATE product_releases SET version = '2.6.0' WHERE product_major_id = ${major} AND is_minimum_supported`;
+      expect(await usableSigningKeyIds(tx, major)).toEqual(['vector-mldsa65']);
+      throw Rollback;
+    }).catch((e) => { if (e !== Rollback) throw e; });
   });
 
   it('refuses offers a v1 client cannot verify, accepts per-product diversity', async () => {
@@ -606,6 +619,21 @@ describe('admin API tokens: scopes, revocation, idempotency, audit', () => {
     expect((await api('GET', '/products', undefined, { token: rotated.body.token })).status).toBe(200);
     const listed = await api('GET', '/tokens', undefined, { token: root.token });
     expect(JSON.stringify(listed.body)).not.toContain(tokenSecret(rotated.body.token));
+  });
+
+  it('rotating another admin\'s PAT keeps its owner and revokes the old token in the same transaction', async () => {
+    const owner = await bootstrapAdminToken(sql, config, ['products:read'], { roles: ['auditor'] });
+    const root = await bootstrapAdminToken(sql, config, ['tokens:manage', 'products:read']);
+    const rotated = await api('POST', `/tokens/${owner.tokenId}/rotate`, {}, { token: root.token });
+    expect(rotated.status).toBe(201);
+    expect(rotated.body.owner).toEqual({ type: 'admin', id: owner.adminId });
+    const rows = await sql<{ id: string; admin_user_id: string; revoked_at: Date | null; rotated_from_id: string | null }[]>`
+      SELECT id, admin_user_id, revoked_at, rotated_from_id FROM admin_api_tokens WHERE id IN (${owner.tokenId}, ${rotated.body.id})`;
+    expect(rows.find((r) => r.id === rotated.body.id)).toMatchObject({ admin_user_id: owner.adminId, revoked_at: null, rotated_from_id: owner.tokenId });
+    expect(rows.find((r) => r.id === owner.tokenId)!.revoked_at).not.toBeNull();
+    // Disabling the original owner disables the replacement too.
+    await sql`UPDATE admin_users SET status = 'disabled' WHERE id = ${owner.adminId}`;
+    expect((await api('GET', '/products', undefined, { token: rotated.body.token })).status).toBe(401);
   });
 
   it('Idempotency-Key replays the first response; destructive operations need confirm', async () => {
