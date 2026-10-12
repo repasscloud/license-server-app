@@ -115,7 +115,7 @@ describe('admin pages are functional', () => {
     const prod = stripe.createProductDirect('UI App Enterprise', { description: '', metadata: { sku: 'uiapp1-ent' } });
     const csv = '﻿product_id,name,_meta:sku,_ls:import,_ls:product,_ls:major,_ls:protocol,_ls:edition,_ls:edition_name,_ls:edition_activation_model,_ls:edition_ownership,_ls:edition_offline_policy,_ls:billing,_ls:price:aud\n'
       + 'prod_Book1,"AI for Normal People — PDF",ai-pdf,,,,,,,,,,,\n'
-      + `${prod},UI App Enterprise,uiapp1-ent,yes,uiapp,1,repass-v1,enterprise,Enterprise,none,organisation,indefinite,one_time,1000\n`;
+      + `${prod},UI App Enterprise,uiapp1-ent,yes,uiapp,1,repass-v1,enterprise,enterprise,none,organisation,indefinite,one_time,1000\n`;
     const form = new FormData();
     form.set('_csrf', await ui.csrfFrom('/admin/catalogue/imports'));
     form.set('file', new File([csv], 'products.csv', { type: 'text/csv' }));

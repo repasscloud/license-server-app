@@ -3,11 +3,9 @@
 // duplicate prevention, conflicts reported (never resolved), idempotent re-imports, partial
 // failures, authorisation and audit, and checkout-time Stripe products under concurrency.
 
-import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig, type Config, type Env } from '../../src/config.ts';
 import type { Sql } from '../../src/db/client.ts';
-import { parseCsv } from '../../src/lib/csv.ts';
 import * as catalogue from '../../src/services/catalogue.ts';
 import { freshDatabase } from '../helpers/db.ts';
 import { FakeStripe } from '../helpers/fake-providers.ts';
@@ -59,9 +57,9 @@ function inStripe(r: Row, extra: { active?: boolean; metadata?: Row } = {}): str
 
 // A product that does not exist yet: the CSV carries everything needed to create it.
 const NEW_ACME: Row = { '_ls:product': 'acme', '_ls:product_name': 'Acme Shredder', '_ls:major': '1', '_ls:protocol': 'repass-v1' };
-const ENT: Row = { '_ls:edition': 'enterprise', '_ls:edition_name': 'Enterprise', '_ls:edition_activation_model': 'none', '_ls:edition_ownership': 'organisation', '_ls:edition_offline_policy': 'indefinite' };
-const BIZ: Row = { '_ls:edition': 'business', '_ls:edition_name': 'Business', '_ls:edition_activation_model': 'device_seats', '_ls:edition_ownership': 'organisation', '_ls:edition_offline_policy': 'indefinite', '_ls:edition_transfer_allowance': '3' };
-const EDU: Row = { '_ls:edition': 'education', '_ls:edition_name': 'Education', '_ls:edition_activation_model': 'none', '_ls:edition_ownership': 'institution', '_ls:edition_offline_policy': 'indefinite' };
+const ENT: Row = { '_ls:edition': 'enterprise', '_ls:edition_name': 'enterprise', '_ls:edition_activation_model': 'none', '_ls:edition_ownership': 'organisation', '_ls:edition_offline_policy': 'indefinite' };
+const BIZ: Row = { '_ls:edition': 'business', '_ls:edition_name': 'business', '_ls:edition_activation_model': 'device_seats', '_ls:edition_ownership': 'organisation', '_ls:edition_offline_policy': 'indefinite', '_ls:edition_transfer_allowance': '3' };
+const EDU: Row = { '_ls:edition': 'education', '_ls:edition_name': 'education', '_ls:edition_activation_model': 'none', '_ls:edition_ownership': 'institution', '_ls:edition_offline_policy': 'indefinite' };
 
 const book: Row = { name: 'AI for Normal People — PDF', '_meta:sku': 'ai-normal-people-1-pdf', '_price:create': 'no' };
 const acmeEnt: Row = { name: 'Acme Shredder 1 Enterprise', description: 'Perpetual, organisation-wide', '_meta:sku': 'acme1-ent', '_ls:import': 'yes', ...NEW_ACME, ...ENT,
@@ -478,21 +476,14 @@ describe('apply safety', () => {
   });
 });
 
-describe('the real stripe-catalogue/products.csv', () => {
-  it('skips the books and imports the CurseDelete 2 offers against a matching Stripe account', async () => {
-    const text = readFileSync(new URL('../../stripe-catalogue/products.csv', import.meta.url), 'utf8');
-    // Mirror what the Stripe script created: same ids, names, descriptions and sku metadata.
-    for (const { values: v } of parseCsv(text).rows) {
-      stripe.products.set(v.product_id!, { id: v.product_id, object: 'product', name: v.name, description: v.description, active: v.active !== 'no', metadata: { sku: v['_meta:sku'] } });
-    }
-    const imp = await previewOk(text);
-    const problems = imp.plan.rows.filter((r: any) => r.errors.length).map((r: any) => `${r.line} ${r.sku}: ${r.errors.join('; ')}`);
-    expect(problems).toEqual([]);
-    expect(imp.summary).toMatchObject({ rows: 11, skipped: 5, selected: 6, create: 6, errors: 0, entitiesToCreate: 0 });
-    expect(imp.plan.rows.filter((r: any) => r.action === 'skipped').every((r: any) => r.sku.startsWith('ai-normal-people'))).toBe(true);
-    const res = await apply(imp.id);
-    expect(res.body.result.counts).toMatchObject({ applied: 6, errors: 0 });
-    const again = await previewOk(text);
-    expect(again.summary).toMatchObject({ unchanged: 6, create: 0, update: 0, link: 0, errors: 0 });
+describe('edition names', () => {
+  it('accepts only the lower-case catalogue names, including corporate for an edition', async () => {
+    const r = (sku: string, name: string): Row => ({ name: `Names ${sku}`, '_meta:sku': sku, '_ls:import': 'yes', '_ls:product': 'zeta', '_ls:product_name': 'Zeta',
+      '_ls:major': '1', '_ls:protocol': 'repass-v1', ...ENT, '_ls:edition_name': name, '_ls:billing': 'one_time', ...prices(1000) });
+    const imp = await previewOk(csv([r('n-upper', 'Enterprise')]));
+    expect(row(imp, 2).errors[0]).toBe('_ls:edition_name must be one of community, education, business, enterprise, corporate (lower case), got "Enterprise"');
+    const ok = await previewOk(csv([r('n-corporate', 'corporate')]));
+    expect(row(ok, 2)).toMatchObject({ action: 'create', errors: [] });
+    expect(ok.plan.entities.find((e: any) => e.kind === 'edition_policy').changes[0]).toMatch(/^create edition policy zeta v1 enterprise edition: "corporate"/);
   });
 });

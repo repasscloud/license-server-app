@@ -36,6 +36,12 @@ const MAX_ROWS = 500;
 const MAX_CSV_BYTES = 512 * 1024;
 const WIRE_SLUG = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 const SKU = /^[A-Za-z0-9_.-]{1,100}$/;
+/**
+ * Edition display names the catalogue uses (owner decision 2026-10-13): lower case only.
+ * `corporate` is a name, not a wire edition: repass-v1 editions are community, education,
+ * business and enterprise, so a corporate-named edition is one of those (usually enterprise).
+ */
+const EDITION_NAMES = ['community', 'education', 'business', 'enterprise', 'corporate'] as const;
 
 /** Every `_ls:` column the importer understands (anything else with the prefix is a typo). */
 export const LS_COLUMNS = new Set([
@@ -231,6 +237,11 @@ function parseRow(line: number, v: Record<string, string>): { spec: RowSpec | nu
   const editionId = r.ls('edition').toLowerCase();
   if (!editionId) r.fail('_ls:edition is required');
 
+  const editionName = r.ls('edition_name') || null;
+  if (editionName && !(EDITION_NAMES as readonly string[]).includes(editionName)) {
+    r.fail(`_ls:edition_name must be one of ${EDITION_NAMES.join(', ')} (lower case), got "${editionName}"`);
+  }
+
   const certText = r.ls('edition_certificate_lifetime_days').toLowerCase();
   let certificateLifetimeSeconds: number | null | undefined;
   if (certText === '') certificateLifetimeSeconds = undefined;
@@ -279,7 +290,7 @@ function parseRow(line: number, v: Record<string, string>): { spec: RowSpec | nu
     },
     edition: {
       id: editionId,
-      displayName: r.ls('edition_name') || null,
+      displayName: editionName,
       activationModel: r.oneOf('_ls:edition_activation_model', ['none', 'device_seats'] as const),
       ownership: r.oneOf('_ls:edition_ownership', ['individual', 'organisation', 'institution'] as const),
       offlinePolicy: r.oneOf('_ls:edition_offline_policy', ['indefinite', 'periodic_check'] as const),
