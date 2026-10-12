@@ -124,10 +124,10 @@ importer does not invent licensing policy.
 | `_ls:major_transfer_allowance` | | 0–1000 | Blank when creating: `3` (system default, shown in the preview). |
 | `_ls:major_activation_key_email` | | `yes`/`no` | Blank when creating: `yes` (system default, shown in the preview). |
 | `_ls:edition` | always required | `community` `education` `business` `enterprise` | |
-| `_ls:edition_name` | edition | text | Display name. |
+| `_ls:edition_name` | edition | `community` `education` `business` `enterprise` `corporate` (lower case only) | Display name, shown to customers (store, invoices). `corporate` is a name, not a wire edition: `repass-v1` licences carry only community, education, business or enterprise, so a corporate-named edition is one of those (usually `_ls:edition = enterprise`). A major has at most one policy per wire edition. |
 | `_ls:edition_activation_model` | edition | `none` `device_seats` | Validated against the protocol in the preview. |
 | `_ls:edition_ownership` | edition | `individual` `organisation` `institution` | |
-| `_ls:edition_offline_policy` | edition | `indefinite` `periodic_check` | |
+| `_ls:edition_offline_policy` | edition | `indefinite` `periodic_check` | `indefinite`: the licence works offline forever once activated. `periodic_check`: the client must renew online; under `repass-v1` that is expressed by an activation-certificate lifetime, so it needs `_ls:edition_certificate_lifetime_days` and is only valid for `device_seats` editions (business). |
 | `_ls:edition_certificate_lifetime_days` | | days, or `none` | Blank when creating: none. |
 | `_ls:edition_transfer_allowance` | | number, or `default` | Blank when creating: the major's default. |
 
