@@ -16,6 +16,7 @@ import { addMember, listCustomerEntitlements, removeMember } from '../services/c
 import { consumeLoginLink, logout, requestLogin } from '../services/human-auth.ts';
 import { getInvoice, invoiceNumber, listInvoices, renderInvoicePdf } from '../services/invoices.ts';
 import * as licensing from '../services/licensing.ts';
+import { BillingAction } from '../views/billing.tsx';
 import { Badge, Csrf, fmt, Layout, money } from '../views/layout.tsx';
 import { type AppEnv, type Ctx, kickEmailDispatch, logError, pdfResponse, toAppError } from './context.ts';
 import { clearSessionCookie, csrfGuard, formData, loadSession, setSessionCookie } from './session.ts';
@@ -135,7 +136,7 @@ portalUi.get('/', async (c) => {
     sections.push(
       <section class="card">
         <h2>{m.organisation_name ?? m.display_name} <span class="muted">({m.role})</span></h2>
-        {m.stripe_customer_id && BILLING.includes(m.role) ? <form class="inline" method="post" action={`/portal/customers/${m.customer_id}/billing`}><Csrf token={c.get('csrf')} /><button class="secondary" type="submit">Manage billing, payment methods and invoices <img class="stripe-button-logo" src="/assets/stripe.svg" alt="Stripe" width="50" height="21" /></button></form> : null}
+        {m.stripe_customer_id && BILLING.includes(m.role) ? <BillingAction customerId={m.customer_id} csrf={c.get('csrf')} /> : null}
         {BILLING.includes(m.role) ? await (async () => {
           const invs = await listInvoices(sql, m.customer_id);
           return invs.length ? <details><summary>Invoices ({invs.length})</summary><ul>{invs.map((i) => <li><a href={`/portal/invoices/${i.id}.pdf`}>{invoiceNumber(c.get('deps').config, i.number, i.livemode)}</a> · {money(i.total, i.currency)} · {fmt(i.issued_at)} · paid</li>)}</ul></details> : null;

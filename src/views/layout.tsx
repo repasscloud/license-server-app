@@ -1,5 +1,6 @@
 /** @jsxImportSource hono/jsx */
 import type { Child, FC } from 'hono/jsx';
+import { SiteFooter } from './footer.tsx';
 import { APP_ASSET_VERSION } from './assets.ts';
 
 export const Layout: FC<{ title: string; controls?: Child; indexable?: boolean; description?: string; canonical?: string; image?: string; realm: 'admin' | 'customer' | 'public'; who?: string | null; csrf?: string; flash?: { kind: 'ok' | 'err'; text: string } | null; children?: Child }> = (p) => (
@@ -29,23 +30,19 @@ export const Layout: FC<{ title: string; controls?: Child; indexable?: boolean; 
         ) : null}
         {p.realm === 'customer' && p.who ? (<nav aria-label="Portal"><a href="/portal">My licences</a><a href="/store">Store</a></nav>) : null}
         {p.realm === 'public' ? (<nav aria-label="Site"><a href="/store">Store</a><a href="/portal">Customer portal</a></nav>) : null}
-        {p.who ? (
-          <span class="who">
-            {p.who}{' '}
-            <form class="inline" method="post" action={p.realm === 'admin' ? '/admin/logout' : '/portal/logout'}>
-              <input type="hidden" name="_csrf" value={p.csrf ?? ''} />
-              <button class="secondary" type="submit">Sign out</button>
-            </form>
-          </span>
-        ) : null}
         {p.controls}
-        <button class="secondary theme-toggle" type="button" data-theme-toggle aria-label="Switch colour theme" hidden>Theme</button>
+        <div class="account-controls">
+          {p.who ? <><span class="who">{p.who}</span><form class="signout-form" method="post" action={p.realm === 'admin' ? '/admin/logout' : '/portal/logout'}>
+            <input type="hidden" name="_csrf" value={p.csrf ?? ''} /><button class="secondary" type="submit">Sign out</button>
+          </form></> : null}
+          <button class="secondary theme-toggle" type="button" data-theme-toggle aria-label="Switch colour theme" hidden>Theme</button>
+        </div>
       </header>
       <main id="main">
         {p.flash ? <div class={`flash ${p.flash.kind}`} role={p.flash.kind === 'err' ? 'alert' : 'status'}>{p.flash.text}</div> : null}
         {p.children}
       </main>
-      <footer class="site-footer"><span>RePass Cloud</span><a href="/store">Products</a><a href="/portal">Customer portal</a><a href="https://repasscloud.com">Company</a></footer>
+      <SiteFooter />
     </body>
   </html>
 );
