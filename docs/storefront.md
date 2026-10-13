@@ -33,3 +33,9 @@ Public keys open in a native dialog with a copy action, without changing table c
 Audit and recent activity tables show compact summaries with single-line UTC timestamps. **View event** opens complete safe event data with copy support; the authenticated detail page works without JavaScript. **Export this page (JSON)** downloads up to 100 events for the current filters and cursor, together with a next-page cursor when present. Audit viewing and export both require `audit:read`; internal IP hashes are excluded. This is a page export, not a whole-history export.
 
 This interface refinement uses existing database columns and does not require an additional migration.
+
+## Shared header and footer
+
+The signed-in account email, sign-out action and theme control share an aligned header group. On small screens, the email occupies its own line above the two buttons. The billing action uses a filled **Manage billing** button with the Stripe wordmark, followed by a short payment-methods and invoices hint.
+
+The shared footer groups product/account navigation, support, payment attribution and legal links. The RePass Cloud brand is the single company-home link. Payment and promotion-code text now lives in the footer instead of the product purchase panel. Component screenshots and browser checks are recorded in [the chrome review](ui-review/chrome/README.md). No additional migration is required.

@@ -32,7 +32,6 @@ export const PriceLine = (p: StoreOffer['prices'][number]) => {
   const tax = Math.round(p.unitAmount * p.taxRateBps / 10000);
   return <><b>{money(p.unitAmount + tax, p.currency)}</b> incl. {p.taxLabel}{term}<br /><span class="muted price-note">{money(p.unitAmount, p.currency)} + {p.taxLabel} {p.taxRateBps / 100}% ({money(tax, p.currency)})</span></>;
 };
-export const StripeAttribution = () => <p class="stripe-attribution">Payment is processed by <a href="https://stripe.com" rel="noopener noreferrer"><img src="/assets/stripe.svg" width="60" height="25" alt="Stripe" /></a>. Promotion codes can be entered at checkout.</p>;
 export const CurrencySelect = ({ currencies, currency }: { currencies: string[]; currency: string }) => <div class="field"><label for="currency">Currency</label><select id="currency" name="currency" data-currency-picker>{currencies.map(cur => <option value={cur} selected={cur === currency}>{cur.toUpperCase()}</option>)}</select></div>;
 export const Catalogue = ({ entries, currency, currencies }: { entries: StoreEntry[]; currency: string; currencies: string[] }) => <>
   <section class="page-intro"><h1>Software that gets to work.</h1><p>Explore RePass Cloud products and choose the licence that fits your use.</p></section>
@@ -96,7 +95,6 @@ export const ProductDetail = ({ entry, selected, currency, csrf, email, country 
       </form>
       <div aria-live="polite" aria-atomic="true" class="offer-summary">{entry.offers.map(o => <section data-offer-summary={o.sku} hidden={o.sku !== selected.sku}><h3>{o.kind === 'bundle' ? 'Bundle licence' : o.components[0]!.edition}</h3><p class="licence-summary">{licenceLabel(o)}</p><p class="description">{o.description || 'Select this licence for your product.'}</p>{o.components.length > 1 ? <ul>{o.components.map((c: StoreComponent) => <li>{c.name} v{c.major}: {c.edition}</li>)}</ul> : null}{o.prices.map(p => <p class="price" data-price={p.currency} hidden={p.currency !== currency}><PriceLine {...p} /></p>)}</section>)}</div>
       <details class="edition-comparison"><summary>Compare all licence options</summary>{entry.offers.map(o => <article><h3><a data-store-link href={`${entry.href}?sku=${encodeURIComponent(o.sku)}&version=${o.components[0]!.major}&edition=${encodeURIComponent(o.components[0]!.editionId)}&currency=${currency}`}>{o.components[0]!.edition} · {licenceLabel(o)}</a></h3><p>{o.description}</p>{o.prices.map(p => <p data-price={p.currency} hidden={p.currency !== currency}><PriceLine {...p} /></p>)}</article>)}</details>
-      <StripeAttribution />
       <p class="muted">Already a customer? Use the same email address to add this licence to your account.</p>
     </section>
     <section class="purchase-panel"><h2>Your details</h2><p class="muted">Your licence and receipt will be sent to this email address.</p>
