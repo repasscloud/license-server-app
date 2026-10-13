@@ -30,3 +30,11 @@ export async function listAudit(db: Db, f: { resourceType?: string; resourceId?:
       AND (${f.beforeId ?? null}::bigint IS NULL OR id < ${f.beforeId ?? 0})
     ORDER BY id DESC LIMIT ${Math.min(f.limit ?? 100, 500)}`;
 }
+
+/** Full safe audit row; IP hashes and other internal columns are not exported. */
+export async function getAuditEvent(db: Db, id: number) {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  const [row] = await db<{ id: number; occurred_at: Date; actor_type: string; actor_id: string | null; action: string; resource_type: string | null; resource_id: string | null; outcome: string; request_id: string | null; detail: unknown }[]>`
+    SELECT id, occurred_at, actor_type, actor_id, action, resource_type, resource_id, outcome, request_id, detail FROM audit_events WHERE id = ${id}`;
+  return row ?? null;
+}

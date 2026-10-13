@@ -1,7 +1,7 @@
 /** @jsxImportSource hono/jsx */
 import { Hono } from 'hono';
 import { listPublicCatalogue, STORE_CURRENCIES } from '../services/catalogue.ts';
-import { Catalogue, ProductDetail, storeEntries } from '../views/storefront.tsx';
+import { Catalogue, ProductDetail, ProductToolbar, selectStoreOffer, storeEntries } from '../views/storefront.tsx';
 import { Layout } from '../views/layout.tsx';
 import { loadSession } from './session.ts';
 import type { AppEnv, Ctx } from './context.ts';
@@ -29,13 +29,10 @@ const product = async (c: Ctx) => {
   const path = new URL(c.req.url).pathname;
   const entry = entries.find(e => e.href === path);
   if (!entry) return c.html(<Layout title="Product unavailable" realm="public"><h1>Product unavailable</h1><p>This product is not currently available. <a href="/store">Explore available products</a>.</p></Layout>, 404);
-  const requested = entry.offers.find(o => o.sku === c.req.query('sku'));
-  const version = Number(c.req.query('version'));
-  const selected = requested && (!version || requested.components[0]!.major === version) ? requested
-    : entry.offers.find(o => o.components[0]!.major === version) ?? [...entry.offers].sort((a, b) => b.components[0]!.major - a.components[0]!.major)[0]!;
+  const selected = selectStoreOffer(entry.offers, { sku: c.req.query('sku'), version: c.req.query('version'), edition: c.req.query('edition') });
   const session = await loadSession(c, 'customer');
   const email = session ? (await c.get('deps').sql<{ email: string }[]>`SELECT email FROM portal_users WHERE id = ${session.subjectId} AND status = 'active'`)[0]?.email ?? null : null;
-  return c.html(<Layout title={entry.name} realm="public" indexable description={entry.description || selected.description} canonical={canonical(c, entry.href)} image={entry.imageUrl ? new URL(entry.imageUrl, c.get('deps').config.publicBaseUrl).href : undefined}>
+  return c.html(<Layout title={entry.name} realm="public" controls={<ProductToolbar entry={entry} selected={selected} currency={currencyFor(c)} currencies={[...STORE_CURRENCIES]} />} indexable description={entry.description || selected.description} canonical={canonical(c, entry.href)} image={entry.imageUrl ? new URL(entry.imageUrl, c.get('deps').config.publicBaseUrl).href : undefined}>
     <ProductDetail entry={entry} selected={selected} currency={currencyFor(c)} currencies={[...STORE_CURRENCIES]} csrf={c.get('csrf')} email={email} country={geoCountry(c)} />
   </Layout>);
 };

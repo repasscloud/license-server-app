@@ -693,7 +693,7 @@ async function validateOrganisationDetails(db: Db, offerId: string, setting: str
 }
 
 export interface StoreComponent {
-  slug: string; name: string; description: string; imageUrl: string | null; major: number; edition: string;
+  slug: string; name: string; description: string; imageUrl: string | null; major: number; edition: string; editionId: string; termType: string; termInterval: string | null; termIntervalCount: number | null;
 }
 export interface StoreOffer {
   sku: string; name: string; description: string; billing: string; kind: string; products: string;
@@ -719,10 +719,11 @@ export async function listPublicCatalogue(db: Db, now: Date): Promise<StoreOffer
     ORDER BY o.name, pv.currency, pv.created_at DESC`;
   const bySku = new Map<string, StoreOffer>();
   // Fetch all public components in one query instead of per-offer database round trips.
-  const components = rows.length ? await db<{ offer_id: string; slug: string; name: string; description: string; image_url: string | null; major_version: number; display_name: string; ownership: string }[]>`
-    SELECT c.offer_id, p.slug, p.name, p.description, p.image_url, m.major_version, ep.display_name, ep.ownership
+  const components = rows.length ? await db<{ offer_id: string; slug: string; name: string; description: string; image_url: string | null; major_version: number; display_name: string; edition_name: string; edition_id: string; term_type: string; term_interval: string | null; term_interval_count: number | null; ownership: string }[]>`
+    SELECT c.offer_id, p.slug, p.name, p.description, p.image_url, m.major_version, ep.display_name, e.name AS edition_name, ep.edition_id, c.term_type, c.term_interval, c.term_interval_count, ep.ownership
     FROM offer_entitlement_components c JOIN product_edition_policies ep ON ep.id = c.edition_policy_id
     JOIN product_majors m ON m.id = ep.product_major_id JOIN products p ON p.id = m.product_id
+    JOIN edition_definitions e ON e.id = ep.edition_id
     WHERE c.offer_id IN (SELECT jsonb_array_elements_text(${db.json([...new Set(rows.map(r => r.id))] as never)}::jsonb)) ORDER BY c.position` : [];
   for (const r of rows) {
     let o = bySku.get(r.sku);
@@ -730,7 +731,7 @@ export async function listPublicCatalogue(db: Db, now: Date): Promise<StoreOffer
       const cs = components.filter(c => c.offer_id === r.id);
       o = { sku: r.sku, name: r.name, description: r.description, billing: r.billing, kind: r.kind,
         products: cs.map(c => `${c.name} ${c.major_version} ${c.display_name}`).join(' + '),
-        components: cs.map(c => ({ slug: c.slug, name: c.name, description: c.description, imageUrl: c.image_url, major: c.major_version, edition: c.display_name })),
+        components: cs.map(c => ({ slug: c.slug, name: c.name, description: c.description, imageUrl: c.image_url, major: c.major_version, edition: c.edition_name, editionId: c.edition_id, termType: c.term_type, termInterval: c.term_interval, termIntervalCount: c.term_interval_count })),
         minQuantity: r.min_quantity, maxQuantity: r.max_quantity, needsOrganisation: needsOrganisation(r, cs.map(c => c.ownership)), prices: [] };
       bySku.set(r.sku, o);
     }

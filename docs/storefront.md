@@ -1,6 +1,6 @@
 # Storefront and interface configuration
 
-The public store groups single-product offers under one product page at `/store/products/<slug>`. Bundles have their own entries at `/store/bundles/<sku>`. Product name, description and artwork come from Products; option names and descriptions come from Offers. Major versions and edition policies define the available version choices. Active price versions define prices, tax and billing intervals.
+The public store groups single-product offers under one product page at `/store/products/<slug>`. Bundles have their own entries at `/store/bundles/<sku>`. Product name, description and artwork come from Products; option names and descriptions come from Offers. Major versions provide numeric version choices; enabled edition policies provide the separate edition selector. Licence type and currency sit in the header toolbar. Concise licence summaries come from billing and term data, including fixed-term durations. Active price versions define prices, tax and billing intervals.
 
 ## Admin setup
 
@@ -12,7 +12,7 @@ The country dropdown uses ISO 3166-1 alpha-2 values with English country names; 
 
 ## Search visibility and privacy
 
-`/`, `/store`, product and bundle pages render catalogue content on the server with descriptions, canonical URLs and social metadata. The sitemap contains currently available public entries. Edition descriptions and comparison links are in the HTML without JavaScript. GET requests support version, SKU and currency selection; JavaScript updates the same content and checkout fields immediately. Account, admin, sign-in and checkout status pages remain `noindex,nofollow`; robots excludes private route groups.
+`/`, `/store`, product and bundle pages render catalogue content on the server with descriptions, canonical URLs and social metadata. The sitemap contains currently available public entries. Edition descriptions and comparison links are in the HTML without JavaScript. GET requests support version, SKU and currency selection; JavaScript updates selected and comparison prices, catalogue prices, links and checkout fields immediately, without reloading. CSS/JavaScript URLs include a content-derived version to avoid stale assets after deployment. Account, admin, sign-in and checkout status pages remain `noindex,nofollow`; robots excludes private route groups.
 
 ## Branding
 
@@ -25,3 +25,11 @@ Stripe wordmark source: https://stripe.com/newsroom/information, official logo k
 Apply migration `0008_storefront_presentation.sql` before deploying this Worker. It adds two columns to existing tables; the table-level grants in `sql/roles.sql` already cover these columns. No new tables or database role changes are required.
 
 This PR does not deploy, merge, alter the binding licensing protocol, or change Stripe products. Configured product artwork affects the storefront only.
+
+## Admin detail views
+
+Public keys open in a native dialog with a copy action, without changing table column widths. Each key also has an authenticated detail-page fallback. Signing-key forms use equal grid tracks and aligned actions. Customer IDs remain on the customer detail page; email event metadata has its own separated block.
+
+Audit and recent activity tables show compact summaries with single-line UTC timestamps. **View event** opens complete safe event data with copy support; the authenticated detail page works without JavaScript. **Export this page (JSON)** downloads up to 100 events for the current filters and cursor, together with a next-page cursor when present. Audit viewing and export both require `audit:read`; internal IP hashes are excluded. This is a page export, not a whole-history export.
+
+This interface refinement uses existing database columns and does not require an additional migration.

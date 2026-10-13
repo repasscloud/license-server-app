@@ -14,6 +14,13 @@ button,.button{display:inline-flex;align-items:center;justify-content:center;gap
 @media(max-width:900px){header.top{gap:16px;padding:18px 24px}.top nav{order:3;flex-basis:100%;border-top:1px solid var(--line);padding-top:12px}.top .who{margin-left:auto}.product-detail{gap:28px}.product-entry{grid-template-columns:80px 1fr;gap:20px}.product-entry .product-art{width:80px;height:80px}.product-entry-action{grid-column:2;border:0;padding:0}.product-entry-action .button{width:auto}.product-heading .product-art{width:88px;height:88px}}
 @media(max-width:640px){main{padding:28px 18px 40px}header.top{padding:16px 18px}.top .who{order:4;flex-basis:100%}.card{padding:20px}.row{gap:16px}.row>form.card{flex-basis:100%}.product-detail{grid-template-columns:1fr;gap:28px}.product-heading{align-items:flex-start;gap:18px}.product-heading .product-art{width:64px;height:64px}.product-entry{padding:22px;grid-template-columns:56px 1fr;gap:16px}.product-entry .product-art{width:56px;height:56px;font-size:1.3rem}.product-entry h2{font-size:1.35rem}.product-entry-action{grid-column:1/-1}.selection-form .field,.product-options .selection-form .field:not(.edition-field){flex-basis:100%}.catalogue-currency .field{flex-basis:150px}.purchase-panel{padding:22px}.site-footer{padding:24px 18px;gap:14px}.site-footer span{flex-basis:100%}th,td{padding:12px}h1{overflow-wrap:anywhere}.realm-admin .top nav{flex-wrap:nowrap;overflow-x:auto;padding-bottom:8px;gap:18px}.realm-admin .top nav a{white-space:nowrap}}
 @media(prefers-reduced-motion:no-preference){button,a,input,select,textarea{transition:background-color .15s,border-color .15s,color .15s}}
+.key-table td{vertical-align:middle}.nowrap,.table-action{white-space:nowrap}.table-action{display:inline-flex;align-items:center;min-height:36px;font-weight:600;text-decoration:none}.audit-wrap{max-height:640px}.audit-wrap th{position:sticky;top:0;z-index:1}.audit-table{min-width:1000px}.audit-table td{padding-top:18px;padding-bottom:18px;vertical-align:middle}.audit-table td:nth-child(3){min-width:240px}.cell-stack{display:grid;gap:10px;min-width:230px;max-width:380px}.cell-stack>code{justify-self:start}.cell-stack .metadata{font-size:.8rem;line-height:1.5;overflow-wrap:anywhere;padding-top:2px}.key-forms{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;align-items:stretch}.key-forms>form.card{display:flex;flex-direction:column;margin:0}.key-forms h2{margin:0 0 20px}.key-forms input,.key-forms select{flex-shrink:0}.key-forms button[type=submit]{align-self:flex-start;margin-top:auto}.key-forms label:last-of-type{margin-bottom:14px}.key-forms .form-actions{margin-top:auto;padding-top:24px}.key-forms .form-actions button{margin:0}
+.detail-dialog{width:min(760px,calc(100vw - 36px));max-height:85vh;overflow-y:auto;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px}.detail-dialog::backdrop{background:rgba(17,12,25,.65)}.dialog-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:24px}.dialog-heading h2{margin:0 0 24px;overflow-wrap:anywhere}.dialog-heading button{margin:0;flex-shrink:0}.public-key-value{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-all;background:var(--bg);padding:20px;border:1px solid var(--line);border-radius:8px;font-size:.9rem;max-height:50vh;overflow:auto}.detail-json{white-space:pre;overflow:auto;background:var(--bg);padding:20px;border:1px solid var(--line);border-radius:8px;font-size:.85rem;max-height:60vh}.dialog-actions{display:flex;align-items:center;gap:16px;flex-wrap:wrap}.dialog-actions button{margin:0}.dialog-actions [role=status]{font-size:.85rem;color:var(--muted)}.stripe-button-logo{background:#fff;padding:4px 6px;border-radius:4px;box-sizing:content-box;flex-shrink:0}
+.store-toolbar{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-left:auto}.store-toolbar label{font-size:.75rem;margin:0 0 4px}.store-toolbar .field{min-width:0}.store-toolbar select{font-size:.85rem;padding:8px 10px;min-height:40px}.store-toolbar [data-licence-picker]{max-width:260px}.store-toolbar [data-currency-picker]{width:92px}.store-toolbar button{margin:0;min-height:40px;padding:8px 12px}.licence-summary{color:var(--muted);font-weight:600;margin:0 0 18px}.product-options .selection-form{padding:24px;background:var(--card);border:1px solid var(--line);border-radius:10px}.offer-summary{padding-top:32px;padding-bottom:32px;margin-top:32px}.offer-summary .price{margin-top:26px}.offer-summary .description{line-height:1.8}.product-detail{gap:56px}
+@media(max-width:1000px){.key-forms{grid-template-columns:1fr}.key-forms button[type=submit]{margin-top:24px}.key-forms>form.card{min-height:0}}
+@media(max-width:900px){.store-toolbar{order:4;flex-basis:100%;justify-content:flex-end;margin-left:0}.theme-toggle{order:2}.product-detail{gap:28px}}
+@media(max-width:640px){.store-toolbar{justify-content:flex-start}.store-toolbar .field:first-child{flex:1}.store-toolbar [data-licence-picker]{width:100%;max-width:none}.product-options .selection-form{padding:20px}.detail-dialog{padding:20px}.dialog-heading{gap:12px}.dialog-heading h2{font-size:1.1rem}.product-detail{gap:28px}.cell-stack{min-width:200px}}
+
 `;
 
 export const APP_JS = `(() => {
@@ -33,7 +40,7 @@ export const APP_JS = `(() => {
       if (table && table.tBodies.length && [...table.tBodies].every(body => !body.rows.length)) {
         const message = document.createElement('p'); message.className = 'table-empty'; message.textContent = 'No records yet.'; wrap.append(message);
       }
-      if (wrap.scrollWidth > wrap.clientWidth) { wrap.tabIndex = 0; wrap.setAttribute('role', 'region'); wrap.setAttribute('aria-label', 'Scrollable data table'); }
+      if (wrap.scrollWidth > wrap.clientWidth || wrap.scrollHeight > wrap.clientHeight) { wrap.tabIndex = 0; wrap.setAttribute('role', 'region'); wrap.setAttribute('aria-label', 'Scrollable data table'); }
     }
     // Connect legacy server-rendered field labels to adjacent controls as well.
     for (const label of document.querySelectorAll('label:not([for])')) {
@@ -48,41 +55,74 @@ export const APP_JS = `(() => {
       const lower = () => { el.value = el.value.trim().toLowerCase(); };
       el.addEventListener('blur', lower); lower();
     }
+    for (const link of document.querySelectorAll('[data-dialog-open]')) {
+      link.addEventListener('click', event => {
+        const dialog = document.getElementById(link.dataset.dialogOpen);
+        if (dialog && typeof dialog.showModal === 'function') { event.preventDefault(); dialog.showModal(); }
+      });
+    }
+    for (const dialog of document.querySelectorAll('dialog')) {
+      dialog.querySelector('[data-dialog-close]').addEventListener('click', () => dialog.close());
+      dialog.addEventListener('click', event => {
+        if (event.target !== dialog) return;
+        const box = dialog.getBoundingClientRect();
+        if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close();
+      });
+    }
+    for (const button of document.querySelectorAll('[data-copy-target]')) {
+      button.addEventListener('click', async () => {
+        const source = document.getElementById(button.dataset.copyTarget);
+        const status = (button.closest('dialog') || button.parentElement).querySelector('[data-copy-status]');
+        try { await navigator.clipboard.writeText(source.textContent); status.textContent = 'Copied.'; }
+        catch { const range = document.createRange(); range.selectNodeContents(source); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); status.textContent = 'Text selected. Use your keyboard to copy.'; }
+      });
+    }
+    const currency = document.querySelector('[data-currency-picker]');
+    const applyCurrency = () => {
+      for (const price of document.querySelectorAll('[data-price]')) price.hidden = price.dataset.price !== currency.value;
+      for (const link of document.querySelectorAll('[data-store-link], header a[href^="/store"]')) {
+        const url = new URL(link.href); url.searchParams.set('currency', currency.value); link.href = url.href;
+      }
+      const field = document.querySelector('[data-currency-field]'); if (field) field.value = currency.value;
+      const url = new URL(location.href); url.searchParams.set('currency', currency.value); history.replaceState(null, '', url);
+    };
     const selector = document.querySelector('[data-product-selector]');
     if (!selector) {
-      const currency = document.querySelector('[data-currency-picker]');
-      if (currency) currency.addEventListener('change', () => currency.form.requestSubmit());
+      if (currency) { currency.addEventListener('change', applyCurrency); applyCurrency();
+        const form = currency.form; if (form) { const button = form.querySelector('button[type=submit]'); if (button) button.hidden = true; } }
       return;
     }
     const editions = selector.querySelector('[data-edition-picker]');
     const version = selector.querySelector('[data-version-picker]');
-    const currency = selector.querySelector('[data-currency-picker]');
+    const licences = document.querySelector('[data-licence-picker]');
     const checkout = document.querySelector('[data-checkout-form]');
-    const apply = (changedVersion = false) => {
-      for (const option of editions.options) { option.hidden = !!version && option.dataset.major !== version.value; option.disabled = option.hidden; }
-      if (changedVersion || editions.selectedOptions[0].disabled) editions.value = [...editions.options].find(o => !o.disabled).value;
-      const choice = editions.selectedOptions[0];
-      for (const panel of document.querySelectorAll('[data-offer-summary]')) {
-        panel.hidden = panel.dataset.offerSummary !== choice.value;
-        for (const price of panel.querySelectorAll('[data-price]')) price.hidden = price.dataset.price !== currency.value;
-      }
+    const apply = () => {
+      const major = version ? version.value : licences.selectedOptions[0].dataset.major;
+      for (const option of editions.options) { option.disabled = !option.dataset.versions.split(',').includes(major); option.hidden = option.disabled; }
+      if (!editions.selectedOptions.length || editions.selectedOptions[0].disabled) editions.value = [...editions.options].find(o => !o.disabled).value;
+      const previousKey = licences.selectedOptions[0]?.dataset.licenceKey;
+      for (const option of licences.options) { option.disabled = option.dataset.major !== major || option.dataset.edition !== editions.value; option.hidden = option.disabled; }
+      if (!licences.selectedOptions.length || licences.selectedOptions[0].disabled) licences.value = ([...licences.options].find(o => !o.disabled && o.dataset.licenceKey === previousKey) || [...licences.options].find(o => !o.disabled)).value;
+      const choice = licences.selectedOptions[0];
+      for (const panel of document.querySelectorAll('[data-offer-summary]')) panel.hidden = panel.dataset.offerSummary !== choice.value;
       checkout.querySelector('[data-sku-field]').value = choice.value;
-      checkout.querySelector('[data-currency-field]').value = currency.value;
       const org = checkout.querySelector('[data-organisation-fields]'); org.hidden = choice.dataset.org !== 'true'; org.disabled = org.hidden;
       const quantity = checkout.querySelector('[name=quantity]'); quantity.min = choice.dataset.min; quantity.max = choice.dataset.max;
       checkout.querySelector('[data-quantity-fields]').hidden = quantity.min === quantity.max;
       quantity.value = String(Math.min(Number(quantity.max), Math.max(Number(quantity.min), Number(quantity.value) || Number(quantity.min))));
       checkout.querySelector('[data-buy]').textContent = choice.dataset.free === 'true' ? 'Register licence' : 'Continue to Stripe';
-      // New selection uses a fresh key; an actual retry of the same form retains its key.
-      const key = checkout.querySelector('[name=idempotencyKey]');
-      if (crypto.randomUUID) key.value = 'ck_' + crypto.randomUUID();
-      const url = new URL(location.href); url.searchParams.set('sku', choice.value); url.searchParams.set('currency', currency.value); if (version) url.searchParams.set('version', version.value); history.replaceState(null, '', url);
+      const key = checkout.querySelector('[name=idempotencyKey]'); if (crypto.randomUUID) key.value = 'ck_' + crypto.randomUUID();
+      applyCurrency();
+      const url = new URL(location.href); url.searchParams.set('sku', choice.value); url.searchParams.set('edition', editions.value); if (version) url.searchParams.set('version', version.value); history.replaceState(null, '', url);
     };
-    if (version) version.addEventListener('change', () => apply(true));
-    editions.addEventListener('change', () => { if (version) version.value = editions.selectedOptions[0].dataset.major; apply(); });
-    currency.addEventListener('change', () => apply()); apply();
-    // A GET submission still renders this same selection on the server.
+    if (version) version.addEventListener('change', apply);
+    editions.addEventListener('change', apply); licences.addEventListener('change', apply); currency.addEventListener('change', apply); apply();
     selector.querySelector('button[type=submit]').hidden = true;
   });
 })();
 `;
+
+// Content-derived URLs invalidate cached assets automatically after any UI deployment.
+let assetHash = 2166136261;
+for (const character of APP_CSS + APP_JS) assetHash = Math.imul(assetHash ^ character.charCodeAt(0), 16777619) >>> 0;
+export const APP_ASSET_VERSION = assetHash.toString(16);
