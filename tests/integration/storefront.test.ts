@@ -33,7 +33,7 @@ it('renders a curated product link and server-rendered edition page with public 
   expect(store).toContain('/store/products/curated');
   expect(store).not.toContain('name="businessName"');
   const detail = await (await client.request('/store/products/curated?sku=curated-community')).text();
-  expect(detail).toContain('Community registration');
+  expect(detail).toContain('Community');
   expect(detail).toContain('name="sku"');
   expect(detail).toContain('name="robots" content="index,follow"');
   expect(detail).toMatch(/data-organisation-fields[^>]*hidden=""[^>]*disabled=""/);
@@ -84,4 +84,16 @@ it('returns a crawlable sitemap and excludes private route groups in robots', as
 
 it('rejects organisation requirements on an individual-only offer', async () => {
   await expect(catalogue.createOffer(sql, actor, { sku: 'contradictory', name: 'Contradictory', kind: 'single', billing: 'free', customerKind: 'individual', organisationDetails: 'required', components: [{ editionPolicyId: policyId, termType: 'perpetual' }] })).rejects.toThrow('Individual-only offers cannot require');
+});
+
+it('separates numeric versions, editions and header licence/currency controls', async () => {
+  const html = await (await client.request('/store/products/curated')).text();
+  expect(html).toMatch(/<option value="2" selected="">2<\/option>/);
+  expect(html).toContain('data-licence-picker');
+  expect(html).toContain('data-edition-picker');
+  const header = html.split('</header>')[0]!;
+  expect(header).toContain('data-currency-picker');
+  expect(header).toContain('data-licence-picker');
+  expect(header).not.toContain('Community registration');
+  expect(html).toMatch(/app\.js\?v=[a-f0-9]+/);
 });

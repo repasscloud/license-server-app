@@ -135,8 +135,7 @@ portalUi.get('/', async (c) => {
     sections.push(
       <section class="card">
         <h2>{m.organisation_name ?? m.display_name} <span class="muted">({m.role})</span></h2>
-        {m.stripe_customer_id && BILLING.includes(m.role) ? <form class="inline" method="post" action={`/portal/customers/${m.customer_id}/billing`}><Csrf token={c.get('csrf')} /><button class="secondary" type="submit">Manage billing, payment methods and invoices (Stripe)</button></form> : null}
-        {BILLING.includes(m.role) && c.get('deps').config.stripePortalLoginUrl ? <p class="muted">Or sign in to <a href={c.get('deps').config.stripePortalLoginUrl!} rel="noopener">Stripe's billing portal</a> directly with this email address.</p> : null}
+        {m.stripe_customer_id && BILLING.includes(m.role) ? <form class="inline" method="post" action={`/portal/customers/${m.customer_id}/billing`}><Csrf token={c.get('csrf')} /><button class="secondary" type="submit">Manage billing, payment methods and invoices <img class="stripe-button-logo" src="/assets/stripe.svg" alt="Stripe" width="50" height="21" /></button></form> : null}
         {BILLING.includes(m.role) ? await (async () => {
           const invs = await listInvoices(sql, m.customer_id);
           return invs.length ? <details><summary>Invoices ({invs.length})</summary><ul>{invs.map((i) => <li><a href={`/portal/invoices/${i.id}.pdf`}>{invoiceNumber(c.get('deps').config, i.number, i.livemode)}</a> · {money(i.total, i.currency)} · {fmt(i.issued_at)} · paid</li>)}</ul></details> : null;

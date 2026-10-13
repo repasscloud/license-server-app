@@ -1,7 +1,8 @@
 /** @jsxImportSource hono/jsx */
 import type { Child, FC } from 'hono/jsx';
+import { APP_ASSET_VERSION } from './assets.ts';
 
-export const Layout: FC<{ title: string; indexable?: boolean; description?: string; canonical?: string; image?: string; realm: 'admin' | 'customer' | 'public'; who?: string | null; csrf?: string; flash?: { kind: 'ok' | 'err'; text: string } | null; children?: Child }> = (p) => (
+export const Layout: FC<{ title: string; controls?: Child; indexable?: boolean; description?: string; canonical?: string; image?: string; realm: 'admin' | 'customer' | 'public'; who?: string | null; csrf?: string; flash?: { kind: 'ok' | 'err'; text: string } | null; children?: Child }> = (p) => (
   <html lang="en">
     <head>
       <meta charset="utf-8" />
@@ -13,8 +14,8 @@ export const Layout: FC<{ title: string; indexable?: boolean; description?: stri
       <meta name="color-scheme" content="light dark" />
       <link rel="icon" href="/assets/brand.svg" type="image/svg+xml" />
       <title>{p.title} · RePassCloud Licensing</title>
-      <link rel="stylesheet" href="/assets/app.css" />
-      <script src="/assets/app.js"></script>
+      <link rel="stylesheet" href={`/assets/app.css?v=${APP_ASSET_VERSION}`} />
+      <script src={`/assets/app.js?v=${APP_ASSET_VERSION}`}></script>
     </head>
     <body class={`realm-${p.realm}`}><a class="skip-link" href="#main">Skip to content</a>
       <header class="top">
@@ -37,6 +38,7 @@ export const Layout: FC<{ title: string; indexable?: boolean; description?: stri
             </form>
           </span>
         ) : null}
+        {p.controls}
         <button class="secondary theme-toggle" type="button" data-theme-toggle aria-label="Switch colour theme" hidden>Theme</button>
       </header>
       <main id="main">

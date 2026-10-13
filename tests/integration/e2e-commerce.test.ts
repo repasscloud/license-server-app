@@ -488,10 +488,10 @@ describe('pricing changes, drift and provider outages', () => {
   it('an offer missing a price in any currency is hidden and cannot be bought', async () => {
     const [usd] = await sql<{ id: string }[]>`SELECT id FROM price_versions WHERE offer_id = ${ids['offer_cd2-community-reg']!} AND currency = 'usd' AND status = 'active'`;
     await ok('POST', `/prices/${usd!.id}/archive`);
-    expect(await (await new Client(env).request('/store/products/cursedelete')).text()).not.toMatch(/Community registration/);
+    expect(await (await new Client(env).request('/store/products/cursedelete')).text()).not.toMatch(/cd2-community-reg/);
     expect((await checkout('cd2-community-reg', 'x@y.example')).res.status).toBe(412);
     await ok('POST', `/offers/${ids['offer_cd2-community-reg']}/prices`, { prices: [{ currency: 'usd', unitAmount: 0 }] });
-    expect(await (await new Client(env).request('/store/products/cursedelete')).text()).toMatch(/Community registration/);
+    expect(await (await new Client(env).request('/store/products/cursedelete')).text()).toMatch(/cd2-community-reg/);
     expect((await checkout('cd2-community-reg', 'x@y.example')).res.status).toBe(303);
   });
 

@@ -2,6 +2,8 @@
 // realm isolation, step-up for high-risk actions, and functional (non-decorative) pages.
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { hmac } from '../../src/crypto/hashing.ts';
+import { newOpaqueToken } from '../../src/services/human-auth.ts';
 import { base32Decode, currentStep, totpAt } from '../../src/auth/totp.ts';
 import { loadConfig, type Env } from '../../src/config.ts';
 import type { Sql } from '../../src/db/client.ts';
@@ -179,6 +181,48 @@ describe('admin pages are functional', () => {
     expect(await (await ui.request('/admin/access')).text()).not.toContain(token);
   });
 
+});
+
+describe('admin presentation refinements', () => {
+  it('exports the same authorised audit page and provides complete individual events', async () => {
+    const log = await ui.request('/admin/audit/export.json?action=product.created');
+    expect(log.status).toBe(200);
+    expect(log.headers.get('content-disposition')).toContain('attachment');
+    const data = await log.json() as { rows: Array<{ id: number; action: string; detail: unknown }> };
+    expect(data.rows.length).toBeGreaterThan(0);
+    expect(data.rows.every(r => r.action.startsWith('product.created'))).toBe(true);
+    const detail = await ui.request(`/admin/audit/${data.rows[0]!.id}`);
+    expect(detail.status).toBe(200);
+    expect(await detail.text()).toContain('Event details');
+    const guest = new Client(env);
+    expect((await guest.request('/admin/audit/export.json')).status).toBe(303);
+  });
+  it('denies full audit data and exports to administrators without audit permission', async () => {
+    await sql`INSERT INTO admin_users (id, email, display_name, totp_enrolled_at) VALUES ('adm_limited', 'limited@example.test', 'Limited', now())`;
+    const session = newOpaqueToken();
+    await sql`INSERT INTO auth_sessions (id_hash, realm, subject_id, state, mfa_at, expires_at, idle_expires_at, ip_hash) VALUES (${await hmac(loadConfig(env).secret('AUTH_PEPPER'), 'session/v1', session)}, 'admin', 'adm_limited', 'active', now(), now()+interval '1 hour', now()+interval '1 hour', 'test')`;
+    const limited = new Client(env); limited.cookies.set('rp_adm', session);
+    expect((await limited.request('/admin/audit/export.json')).status).toBe(403);
+    expect((await limited.request('/admin/audit/1')).status).toBe(403);
+  });
+  it('opens public keys on a dedicated detail surface with copy support', async () => {
+    const html = await (await ui.request('/admin/keys')).text();
+    expect(html).toContain('data-dialog-open="public-key-ui-ed25519-2026"');
+    expect(html).toContain('class="key-forms"');
+    const detail = await ui.request('/admin/keys/ui-ed25519-2026/public');
+    expect(detail.status).toBe(200);
+    expect(await detail.text()).toContain('Copy public key');
+  });
+  it('keeps audit metadata out of the compact table and timestamps on one line', async () => {
+    const html = await (await ui.request('/admin')).text();
+    expect(html).toContain('class="audit-table"');
+    expect(html).toContain('class="nowrap"');
+    expect(html).toContain('View event');
+    expect(html).not.toContain('class="muted mono">adm_root');
+  });
+});
+
+describe('end administrator session', () => {
   it('logout revokes the session', async () => {
     await ui.request('/admin/logout', { method: 'POST', form: { _csrf: await ui.csrfFrom('/admin') } });
     expect((await ui.request('/admin')).headers.get('location')).toMatch(/^\/admin\/login/);

@@ -38,25 +38,64 @@ export const Catalogue = ({ entries, currency, currencies }: { entries: StoreEnt
   <section class="page-intro"><h1>Software that gets to work.</h1><p>Explore RePass Cloud products and choose the licence that fits your use.</p></section>
   {entries.length ? <form method="get" action="/store" class="selection-form catalogue-currency"><CurrencySelect currencies={currencies} currency={currency} /><button class="secondary" type="submit">Show prices</button></form> : <div class="empty-state"><h2>Products are coming soon</h2><p>There are no products available to buy right now.</p></div>}
   <div class="product-list">{entries.map(entry => {
-    const prices = entry.offers.flatMap(o => o.prices.filter(p => p.currency === currency));
-    const lowest = prices.sort((a, b) => (a.unitAmount + Math.round(a.unitAmount * (a.taxRateBps ?? 0) / 10000)) - (b.unitAmount + Math.round(b.unitAmount * (b.taxRateBps ?? 0) / 10000)))[0];
-    return <article class="product-entry"><ProductArt imageUrl={entry.imageUrl} name={entry.name} /><div><h2><a href={`${entry.href}?currency=${currency}`}>{entry.name}</a></h2><p>{entry.description || 'Choose an edition to see licence details and pricing.'}</p><p class="muted">{entry.offers.length} licence {entry.offers.length === 1 ? 'option' : 'options'} available</p></div><div class="product-entry-action">{lowest ? <p>{prices.length > 1 ? 'From ' : ''}<PriceLine {...lowest} /></p> : null}<a class="button" href={`${entry.href}?currency=${currency}`}>Explore product</a></div></article>;
+    return <article class="product-entry"><ProductArt imageUrl={entry.imageUrl} name={entry.name} /><div><h2><a data-store-link href={`${entry.href}?currency=${currency}`}>{entry.name}</a></h2><p>{entry.description || 'Choose an edition to see licence details and pricing.'}</p><p class="muted">{entry.offers.length} licence {entry.offers.length === 1 ? 'option' : 'options'} available</p></div><div class="product-entry-action">{currencies.map(cur => {
+      const prices = entry.offers.flatMap(o => o.prices.filter(p => p.currency === cur));
+      const lowest = prices.sort((a, b) => (a.unitAmount + Math.round(a.unitAmount * (a.taxRateBps ?? 0) / 10000)) - (b.unitAmount + Math.round(b.unitAmount * (b.taxRateBps ?? 0) / 10000)))[0];
+      return lowest ? <p data-price={cur} hidden={cur !== currency}>{prices.length > 1 && lowest.unitAmount > 0 ? 'From ' : ''}<PriceLine {...lowest} /></p> : null;
+    })}<a class="button" data-store-link href={`${entry.href}?currency=${currency}`}>Explore product</a></div></article>;
   })}</div>
 </>;
-export const ProductDetail = ({ entry, selected, currency, currencies, csrf, email, country }: { entry: StoreEntry; selected: StoreOffer; currency: string; currencies: string[]; csrf: string; email: string | null; country: string }) => {
+/** Labels describe the selected licence using authoritative billing/term data. */
+export function licenceLabel(offer: StoreOffer): string {
+  const price = offer.prices[0];
+  if (offer.billing === 'recurring' && price?.recurringInterval) {
+    const count = price.recurringIntervalCount ?? 1;
+    if (count === 1) return ({ year: 'Annual', month: 'Monthly', week: 'Weekly', day: 'Daily' }[price.recurringInterval] ?? price.recurringInterval) + ' subscription';
+    return `Every ${count} ${price.recurringInterval}s`;
+  }
+  const component = offer.components[0];
+  if (component?.termType === 'fixed_term' && component.termInterval && component.termIntervalCount) {
+    return `Fixed term: ${component.termIntervalCount} ${component.termInterval}${component.termIntervalCount === 1 ? '' : 's'}`;
+  }
+  return 'Perpetual';
+}
+export function licenceKey(offer: StoreOffer): string {
+  const component = offer.components[0]!;
+  const recurring = offer.billing === 'recurring';
+  const interval = recurring ? offer.prices[0]?.recurringInterval : component.termInterval;
+  const count = recurring ? offer.prices[0]?.recurringIntervalCount : component.termIntervalCount;
+  return [offer.billing, component.termType, interval ?? '', count ?? ''].join(':');
+}
+export function selectStoreOffer(offers: StoreOffer[], query: { sku?: string; version?: string; edition?: string }): StoreOffer {
+  const requested = offers.find(o => o.sku === query.sku);
+  const majors = offers.map(o => o.components[0]!.major);
+  const askedVersion = Number(query.version);
+  const major = majors.includes(askedVersion) ? askedVersion : requested?.components[0]!.major ?? Math.max(...majors);
+  const versionOffers = offers.filter(o => o.components[0]!.major === major);
+  const askedEdition = query.edition ?? requested?.components[0]!.editionId;
+  const edition = versionOffers.some(o => o.components[0]!.editionId === askedEdition) ? askedEdition : versionOffers[0]!.components[0]!.editionId;
+  const choices = versionOffers.filter(o => o.components[0]!.editionId === edition);
+  return choices.find(o => o.sku === query.sku) ?? choices.find(o => requested && licenceKey(o) === licenceKey(requested)) ?? choices[0]!;
+}
+export const ProductToolbar = ({ entry, selected, currency, currencies }: { entry: StoreEntry; selected: StoreOffer; currency: string; currencies: string[] }) => <div class="store-toolbar" data-store-toolbar>
+  <div class="field"><label for="licence">Licence type</label><select id="licence" name="sku" form="product-selection" data-licence-picker>{entry.offers.map(o => <option value={o.sku} selected={o.sku === selected.sku} disabled={o.components[0]!.major !== selected.components[0]!.major || o.components[0]!.editionId !== selected.components[0]!.editionId} hidden={o.components[0]!.major !== selected.components[0]!.major || o.components[0]!.editionId !== selected.components[0]!.editionId} data-licence-key={licenceKey(o)} data-major={o.components[0]!.major} data-edition={o.components[0]!.editionId} data-org={String(o.needsOrganisation)} data-min={o.minQuantity} data-max={o.maxQuantity} data-free={String(o.prices.every(p => p.unitAmount === 0))}>{licenceLabel(o)}</option>)}</select></div>
+  <div class="field"><label for="currency">Currency</label><select id="currency" name="currency" form="product-selection" data-currency-picker>{currencies.map(cur => <option value={cur} selected={cur === currency}>{cur.toUpperCase()}</option>)}</select></div>
+</div>;
+export const ProductDetail = ({ entry, selected, currency, csrf, email, country }: { entry: StoreEntry; selected: StoreOffer; currency: string; currencies: string[]; csrf: string; email: string | null; country: string }) => {
   const major = selected.components[0]!.major;
   const majors = [...new Set(entry.offers.map(o => o.components[0]!.major))].sort((a, b) => b - a);
+  const editions = [...new Map(entry.offers.map(o => [o.components[0]!.editionId, o.components[0]!])).values()];
   return <>
-    <p class="breadcrumb"><a href="/store">All products</a> / {entry.name}</p>
+    <p class="breadcrumb"><a href={`/store?currency=${currency}`} data-store-link>All products</a> / {entry.name}</p>
     <section class="product-heading"><ProductArt imageUrl={entry.imageUrl} name={entry.name} /><div><h1>{entry.name}</h1><p>{entry.description}</p></div></section>
     <div class="product-detail">
-      <section class="product-options"><h2>Choose your licence</h2><form method="get" action={entry.href} class="selection-form" data-product-selector>
-        {entry.key.startsWith('bundle:') ? null : <div class="field"><label for="version">Version</label><select id="version" name="version" data-version-picker>{majors.map(v => <option value={String(v)} selected={v === major}>Version {v}</option>)}</select></div>}
-        <div class="field edition-field"><label for="edition">Edition and billing</label><select id="edition" name="sku" data-edition-picker>{entry.offers.map(o => <option value={o.sku} selected={o.sku === selected.sku} hidden={o.components[0]!.major !== major} disabled={o.components[0]!.major !== major} data-major={o.components[0]!.major} data-org={String(o.needsOrganisation)} data-min={o.minQuantity} data-max={o.maxQuantity} data-free={String(o.prices.every(p => p.unitAmount === 0))}>{o.name}</option>)}</select></div>
-        <CurrencySelect currencies={currencies} currency={currency} /><button class="secondary" type="submit">Update selection</button>
+      <section class="product-options"><h2>Choose your edition</h2><form id="product-selection" method="get" action={entry.href} class="selection-form" data-product-selector>
+        {entry.key.startsWith('bundle:') ? null : <div class="field"><label for="version">Version</label><select id="version" name="version" data-version-picker>{majors.map(v => <option value={String(v)} selected={v === major}>{v}</option>)}</select></div>}
+        <div class="field edition-field"><label for="edition">Edition</label><select id="edition" name="edition" data-edition-picker>{editions.map(c => <option value={c.editionId} selected={c.editionId === selected.components[0]!.editionId} disabled={!entry.offers.some(o => o.components[0]!.major === major && o.components[0]!.editionId === c.editionId)} data-versions={entry.offers.filter(o => o.components[0]!.editionId === c.editionId).map(o => o.components[0]!.major).join(',')}>{c.edition}</option>)}</select></div>
+        <button class="secondary" type="submit">Update selection</button>
       </form>
-      <div aria-live="polite" aria-atomic="true" class="offer-summary">{entry.offers.map(o => <section data-offer-summary={o.sku} hidden={o.sku !== selected.sku}><h3>{o.name}</h3><p class="description">{o.description || o.products}</p>{o.components.length > 1 ? <ul>{o.components.map((c: StoreComponent) => <li>{c.name} v{c.major}: {c.edition}</li>)}</ul> : null}{o.prices.map(p => <p class="price" data-price={p.currency} hidden={p.currency !== currency}><PriceLine {...p} /></p>)}</section>)}</div>
-      <details class="edition-comparison"><summary>Compare all licence options</summary>{entry.offers.map(o => <article><h3><a href={`${entry.href}?sku=${encodeURIComponent(o.sku)}&version=${o.components[0]!.major}&currency=${currency}`}>{o.name}</a></h3><p>{o.description || o.products}</p><PriceLine {...o.prices.find(p => p.currency === currency)!} /></article>)}</details>
+      <div aria-live="polite" aria-atomic="true" class="offer-summary">{entry.offers.map(o => <section data-offer-summary={o.sku} hidden={o.sku !== selected.sku}><h3>{o.kind === 'bundle' ? 'Bundle licence' : o.components[0]!.edition}</h3><p class="licence-summary">{licenceLabel(o)}</p><p class="description">{o.description || 'Select this licence for your product.'}</p>{o.components.length > 1 ? <ul>{o.components.map((c: StoreComponent) => <li>{c.name} v{c.major}: {c.edition}</li>)}</ul> : null}{o.prices.map(p => <p class="price" data-price={p.currency} hidden={p.currency !== currency}><PriceLine {...p} /></p>)}</section>)}</div>
+      <details class="edition-comparison"><summary>Compare all licence options</summary>{entry.offers.map(o => <article><h3><a data-store-link href={`${entry.href}?sku=${encodeURIComponent(o.sku)}&version=${o.components[0]!.major}&edition=${encodeURIComponent(o.components[0]!.editionId)}&currency=${currency}`}>{o.components[0]!.edition} · {licenceLabel(o)}</a></h3><p>{o.description}</p>{o.prices.map(p => <p data-price={p.currency} hidden={p.currency !== currency}><PriceLine {...p} /></p>)}</article>)}</details>
       <StripeAttribution />
       <p class="muted">Already a customer? Use the same email address to add this licence to your account.</p>
     </section>

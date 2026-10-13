@@ -9,7 +9,7 @@ import { ALL_PERMISSIONS, HIGH_RISK_SCOPES } from '../auth/permissions.ts';
 import { ALGORITHMS, isSignatureAlgorithm } from '../crypto/algorithms.ts';
 import { AppError } from '../lib/errors.ts';
 import type { Actor } from '../services/actor.ts';
-import { listAudit } from '../services/audit.ts';
+import { getAuditEvent, listAudit } from '../services/audit.ts';
 import * as admins from '../services/admins.ts';
 import * as billing from '../services/billing.ts';
 import * as catalogue from '../services/catalogue.ts';
@@ -24,6 +24,7 @@ import { listJobs, retryDeadJob } from '../services/jobs.ts';
 import * as licensing from '../services/licensing.ts';
 import * as keys from '../services/signing-keys.ts';
 import * as stripeSync from '../services/stripe-sync.ts';
+import { DetailDialog } from '../views/dialog.tsx';
 import { Badge, Csrf, fmt, Layout, money } from '../views/layout.tsx';
 import { type AppEnv, type Ctx, kickEmailDispatch, logError, pdfResponse, toAppError } from './context.ts';
 import { bool, clearSessionCookie, csrfGuard, formData, loadSession, numOrNull, setSessionCookie, strOrNull, type RealmSession } from './session.ts';
@@ -240,11 +241,13 @@ adminUi.get('/', async (c) => {
   });
 });
 
-const AuditTable = ({ rows }: { rows: ReadonlyArray<Awaited<ReturnType<typeof listAudit>>[number]> }) => (
-  <div class="table-wrap"><table><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Resource</th><th>Outcome</th><th>Detail</th></tr></thead><tbody>
-    {rows.map((r) => <tr><td>{fmt(r.occurred_at)}</td><td>{r.actor_type}<br /><span class="muted mono">{r.actor_id ?? ''}</span></td><td>{r.action}</td><td>{r.resource_type ?? ''} <span class="mono">{r.resource_id ?? ''}</span></td><td><Badge v={r.outcome} /></td><td><code>{JSON.stringify(r.detail).slice(0, 220)}</code></td></tr>)}
+type AuditRow = Awaited<ReturnType<typeof listAudit>>[number];
+const AuditTable = ({ rows }: { rows: ReadonlyArray<AuditRow> }) => <>
+  <div class="table-wrap audit-wrap"><table class="audit-table"><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Resource</th><th>Outcome</th><th>Details</th></tr></thead><tbody>
+    {rows.map(r => <tr><td class="nowrap">{fmt(r.occurred_at)}</td><td>{r.actor_type}</td><td>{r.action}</td><td>{r.resource_type ?? '—'}</td><td><Badge v={r.outcome} /></td><td><a class="table-action" href={`/admin/audit/${r.id}`} data-dialog-open={`audit-${r.id}`}>View event</a></td></tr>)}
   </tbody></table></div>
-);
+  {rows.map(r => <DetailDialog id={`audit-${r.id}`} title={`Audit event ${r.id}`} copyId={`audit-data-${r.id}`}><pre class="detail-json" id={`audit-data-${r.id}`}>{JSON.stringify(r, null, 2)}</pre></DetailDialog>)}
+</>;
 
 // --------------------------------------------------------------------------------------------
 // Products, majors, releases, edition policies
@@ -695,7 +698,7 @@ adminUi.get('/customers', async (c) => {
         <h1>Customers</h1>
         <form method="get" action="/admin/customers"><label for="q">Search (name, organisation, email, id)</label><input id="q" name="q" value={c.req.query('q') ?? ''} /><button type="submit">Search</button></form>
         <div class="table-wrap"><table><thead><tr><th>Customer</th><th>Kind</th><th>Billing email</th><th>Status</th><th>Entitlements</th><th>Created</th></tr></thead><tbody>
-          {rows.map((r) => <tr><td><a href={`/admin/customers/${r.id}`}>{r.organisation_name ?? r.display_name}</a><br /><span class="mono muted">{r.id}</span></td><td>{r.kind}</td><td>{r.billing_email}</td><td><Badge v={r.status} /></td><td>{r.entitlements}</td><td>{fmt(r.created_at)}</td></tr>)}
+          {rows.map((r) => <tr><td><a href={`/admin/customers/${r.id}`}>{r.organisation_name ?? r.display_name}</a></td><td>{r.kind}</td><td>{r.billing_email}</td><td><Badge v={r.status} /></td><td>{r.entitlements}</td><td class="nowrap">{fmt(r.created_at)}</td></tr>)}
         </tbody></table></div>
         {can(c, 'customers:write') ? (
           <details class="card"><summary>New customer</summary><form method="post" action="/admin/customers"><Csrf token={c.get('csrf')} />
@@ -942,8 +945,8 @@ adminUi.get('/keys', async (c) => {
       <>
         <h1>Signing keys</h1>
         <p class="muted">Private keys are AES-256-GCM encrypted in PostgreSQL under SIGNING_KEK_V{c.get('deps').config.signingKeks.activeVersion} (Workers Secret) and are never displayed or exported here. They are decrypted only inside the Worker to sign — this is application-level encryption, not an HSM.</p>
-        <div class="table-wrap"><table><thead><tr><th>Key id</th><th>Algorithm</th><th>Status</th><th>Origin</th><th>KEK</th><th>Public key (base64url)</th><th>Created</th><th></th></tr></thead><tbody>
-          {list.map((k) => <><tr><td><code>{k.keyId}</code></td><td>{k.algorithm}</td><td><Badge v={k.status} /></td><td>{k.origin}</td><td>v{k.kekVersion}</td><td><details><summary>Show public key</summary><code>{k.publicKey}</code></details></td><td>{fmt(k.createdAt)}</td>
+        <div class="table-wrap"><table class="key-table"><thead><tr><th>Key id</th><th>Algorithm</th><th>Status</th><th>Origin</th><th>KEK</th><th>Public key (base64url)</th><th>Created</th><th></th></tr></thead><tbody>
+          {list.map((k) => <><tr><td><code>{k.keyId}</code></td><td>{k.algorithm}</td><td><Badge v={k.status} /></td><td>{k.origin}</td><td>v{k.kekVersion}</td><td><a class="table-action" data-dialog-open={`public-key-${k.keyId}`} href={`/admin/keys/${k.keyId}/public`}>Show public key</a></td><td class="nowrap">{fmt(k.createdAt)}</td>
             <td>{m && k.status === 'generated' ? <form class="inline" method="post" action={`/admin/keys/${k.keyId}/publish`}><Csrf token={c.get('csrf')} /><button type="submit">Publish</button></form> : null}</td></tr>
             {m && (k.status === 'published' || k.status === 'generated') ? <tr class="key-action-row"><td colspan={8}><details class="key-action"><summary>Retire / compromise {k.keyId}</summary>
               <form method="post" action={`/admin/keys/${k.keyId}/retire`}><Csrf token={c.get('csrf')} />
@@ -951,29 +954,37 @@ adminUi.get('/keys', async (c) => {
                 <label><input type="checkbox" name="force" /> Force even if a product is left without eligible keys</label><label><input type="checkbox" name="compromised" /> Mark compromised</label><button class="danger" type="submit">Apply</button>
               </form></details></td></tr> : null}</>)}
         </tbody></table></div>
+        {list.map(k => <DetailDialog id={`public-key-${k.keyId}`} title={`Public key: ${k.keyId}`} copyId={`public-key-data-${k.keyId}`}><p class="muted">{k.algorithm} · base64url</p><pre class="public-key-value" id={`public-key-data-${k.keyId}`}>{k.publicKey}</pre></DetailDialog>)}
         <h2>Trust and eligibility per product major</h2>
         <KeyCompatTable rows={compat} />
         {m ? (
-          <div class="row">
+          <div class="key-forms">
             <form method="post" action="/admin/keys" class="card"><Csrf token={c.get('csrf')} /><h2>Generate keypair</h2>
               <label for="alg">Algorithm</label><select id="alg" name="algorithm">{ALGORITHMS.map((a) => <option>{a}</option>)}</select>
               <label for="kid">Key id (blank = repass-&lt;alg&gt;-&lt;year&gt;)</label><input id="kid" name="keyId" pattern="[A-Za-z0-9_.-]{1,128}" />
-              <p class="muted">Generating changes nothing until the key is published, trusted by a shipped minimum release, and marked eligible.</p><button type="submit">Generate</button></form>
+              <p class="muted">Generating changes nothing until the key is published, trusted by a shipped minimum release, and marked eligible.</p><div class="form-actions"><button type="submit">Generate</button></div></form>
             <form method="post" action="/admin/keys/trust" class="card"><Csrf token={c.get('csrf')} /><h2>Record trust</h2>
               <label>Key</label><select name="keyId">{list.map((k) => <option>{k.keyId}</option>)}</select>
               <label>Product major</label><select name="productMajorId">{majors.map((x) => <option value={x.id}>{x.label}</option>)}</select>
               <label>First release embedding the key</label><input name="trustedSinceVersion" required placeholder="2.1.0" /><label>Last release embedding it (optional)</label><input name="trustedUntilVersion" />
-              <button type="submit">Save trust</button></form>
+              <div class="form-actions"><button type="submit">Save trust</button></div></form>
             <form method="post" action="/admin/keys/eligibility" class="card"><Csrf token={c.get('csrf')} /><h2>Eligibility</h2>
               <label>Key</label><select name="keyId">{list.map((k) => <option>{k.keyId}</option>)}</select>
               <label>Product major</label><select name="productMajorId">{majors.map((x) => <option value={x.id}>{x.label}</option>)}</select>
-              <label><input type="checkbox" name="eligible" checked /> Eligible for issuance</label><button type="submit">Apply</button></form>
+              <label><input type="checkbox" name="eligible" checked /> Eligible for issuance</label><div class="form-actions"><button type="submit">Apply</button></div></form>
           </div>
         ) : null}
         <p><a href="/admin/keys/export">Download trusted public keys (JSON)</a></p>
       </>
     ),
   });
+});
+
+adminUi.get('/keys/:id/public', async c => {
+  if (!can(c, 'signing_keys:read_public')) return render(c, { title: 'Public key', body: <p>Missing permission signing_keys:read_public.</p> }, 403);
+  const key = (await keys.listSigningKeys(c.get('deps').sql)).find(k => k.keyId === c.req.param('id'));
+  if (!key) return render(c, { title: 'Public key unavailable', body: <p>Key not found.</p> }, 404);
+  return render(c, { title: 'Public key', body: <section class="card"><h1>Public key</h1><p>{key.keyId} · {key.algorithm}</p><pre id="public-key-data" class="public-key-value">{key.publicKey}</pre><div class="dialog-actions"><button type="button" data-copy-target="public-key-data">Copy public key</button><span data-copy-status role="status"></span></div><p><a href="/admin/keys">Back to signing keys</a></p></section> });
 });
 
 adminUi.post('/keys', action(async (c, f) => {
@@ -1083,7 +1094,7 @@ adminUi.get('/email', async (c) => {
         <p class="muted">Transport: <b>{c.get('deps').config.mailTransport}</b>. {c.get('deps').config.has('MAILERSEND_WEBHOOK_SECRET') ? 'Delivery webhooks configured: delivered/bounced states are tracked.' : 'Delivery webhooks are NOT configured: "sent" means accepted by MailerSend, not delivered.'}</p>
         <p><a href="/admin/email?status=dead">dead</a> · <a href="/admin/email?status=uncertain">uncertain</a> · <a href="/admin/email?status=failed">failed</a> · <a href="/admin/email">all</a></p>
         <div class="table-wrap"><table><thead><tr><th>Email</th><th>Template</th><th>Status</th><th>Attempts</th><th>Provider id</th><th>Error</th><th>Created</th><th></th></tr></thead><tbody>
-          {rows.map((r) => <tr><td><code>{r.id}</code><br /><span class="muted">{r.business_key}</span></td><td>{r.template_key}</td><td><Badge v={r.status} /></td><td>{r.attempts}</td><td><code>{r.provider_message_id ?? '—'}</code></td><td class="muted">{r.last_error ?? ''}</td><td>{fmt(r.created_at)}</td>
+          {rows.map((r) => <tr><td><div class="cell-stack"><code>{r.id}</code><span class="metadata muted">{r.business_key}</span></div></td><td>{r.template_key}</td><td><Badge v={r.status} /></td><td>{r.attempts}</td><td><code>{r.provider_message_id ?? '—'}</code></td><td class="muted">{r.last_error ?? ''}</td><td class="nowrap">{fmt(r.created_at)}</td>
             <td>{can(c, 'email:retry') && ['dead', 'failed', 'uncertain'].includes(r.status) ? <form class="inline" method="post" action={`/admin/email/${r.id}/retry`}><Csrf token={c.get('csrf')} /><button class="secondary" type="submit">Retry</button></form> : null}
               {can(c, 'email:retry') && r.status === 'uncertain' ? <><form class="inline" method="post" action={`/admin/email/${r.id}/resolve`}><Csrf token={c.get('csrf')} /><input type="hidden" name="outcome" value="sent" /><button class="secondary" type="submit">Mark sent</button></form><form class="inline" method="post" action={`/admin/email/${r.id}/resolve`}><Csrf token={c.get('csrf')} /><input type="hidden" name="outcome" value="dead" /><button class="secondary" type="submit">Mark not sent</button></form></> : null}</td></tr>)}
         </tbody></table></div>
@@ -1200,9 +1211,23 @@ adminUi.post('/access/service-accounts/:id/status', action(async (c, f) => (awai
 // Audit
 // --------------------------------------------------------------------------------------------
 
+const auditFilters = (c: Ctx) => ({ resourceType: c.req.query('resourceType') || undefined, resourceId: c.req.query('resourceId') || undefined, actorId: c.req.query('actorId') || undefined, action: c.req.query('action') || undefined, outcome: c.req.query('outcome') || undefined, beforeId: c.req.query('beforeId') ? Number(c.req.query('beforeId')) : undefined, limit: 100 });
+adminUi.get('/audit/export.json', async c => {
+  if (!can(c, 'audit:read')) return render(c, { title: 'Audit export', body: <p>Missing permission audit:read.</p> }, 403);
+  const rows = await listAudit(c.get('deps').sql, auditFilters(c));
+  c.header('Content-Disposition', 'attachment; filename="audit-events.json"');
+  return c.json({ filters: auditFilters(c), rows, nextBeforeId: rows.length === 100 ? rows.at(-1)!.id : null });
+});
+adminUi.get('/audit/:id', async c => {
+  if (!can(c, 'audit:read')) return render(c, { title: 'Audit event', body: <p>Missing permission audit:read.</p> }, 403);
+  const row = await getAuditEvent(c.get('deps').sql, Number(c.req.param('id')));
+  if (!row) return render(c, { title: 'Audit event unavailable', body: <p>Event not found.</p> }, 404);
+  return render(c, { title: `Audit event ${row.id}`, body: <section class="card"><h1>Event details</h1><pre class="detail-json" id="event-data">{JSON.stringify(row, null, 2)}</pre><div class="dialog-actions"><button type="button" data-copy-target="event-data">Copy event</button><span data-copy-status role="status"></span></div><p><a href="/admin/audit">Back to audit log</a></p></section> });
+});
+
 adminUi.get('/audit', async (c) => {
   if (!can(c, 'audit:read')) return render(c, { title: 'Audit', flash: { kind: 'err', text: 'Missing permission audit:read' }, body: <p /> }, 403);
-  const rows = await listAudit(c.get('deps').sql, { resourceType: c.req.query('resourceType') || undefined, resourceId: c.req.query('resourceId') || undefined, actorId: c.req.query('actorId') || undefined, action: c.req.query('action') || undefined, outcome: c.req.query('outcome') || undefined, beforeId: c.req.query('beforeId') ? Number(c.req.query('beforeId')) : undefined, limit: 100 });
+  const rows = await listAudit(c.get('deps').sql, auditFilters(c));
   const last = rows[rows.length - 1];
   return render(c, {
     title: 'Audit log',
@@ -1211,6 +1236,7 @@ adminUi.get('/audit', async (c) => {
         <h1>Audit log</h1>
         <form method="get" action="/admin/audit" class="row">
           {['resourceType', 'resourceId', 'actorId', 'action', 'outcome'].map((k) => <div><label for={k}>{k}</label><input id={k} name={k} value={c.req.query(k) ?? ''} /></div>)}<div><button type="submit">Filter</button></div></form>
+        <p><a class="button secondary" href={`/admin/audit/export.json?${new URLSearchParams(c.req.query())}`}>Export this page (JSON)</a></p>
         <AuditTable rows={rows} />
         {last ? <p><a href={`/admin/audit?${new URLSearchParams({ ...Object.fromEntries(Object.entries(c.req.query()).filter(([k]) => k !== 'beforeId')), beforeId: String(last.id) })}`}>Older →</a></p> : null}
       </>
